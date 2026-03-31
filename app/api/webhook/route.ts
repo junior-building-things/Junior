@@ -1,13 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
+export const runtime = 'edge';
 
-export const maxDuration = 60;
-
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   const data = await req.json();
 
   // Lark URL verification challenge — respond immediately, no imports
   if (data.challenge) {
-    return NextResponse.json({ challenge: data.challenge });
+    return Response.json({ challenge: data.challenge });
   }
 
   // Lazy-load heavy modules only for actual messages
@@ -20,14 +18,14 @@ export async function POST(req: NextRequest) {
   const header = data.header ?? {};
   const eventType = header.event_type;
   if (eventType && eventType !== 'im.message.receive_v1') {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   const event = data.event ?? {};
 
   // Prevent bot loop
   if (event.sender?.sender_type !== 'user') {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   const message = event.message ?? {};
@@ -42,15 +40,15 @@ export async function POST(req: NextRequest) {
     const contentObj = JSON.parse(message.content ?? '{}');
     userText = sanitizeText(contentObj.text ?? '');
   } catch {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   if (!userText || !chatId) {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   if (!shouldReply(event)) {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   // Deduplication
@@ -60,7 +58,7 @@ export async function POST(req: NextRequest) {
       ? `evt:${header.event_id}`
       : null;
   if (dedupeKey && !(await recordEventOnce(dedupeKey))) {
-    return new NextResponse('', { status: 200 });
+    return new Response('', { status: 200 });
   }
 
   // React with a thinking emoji while processing
@@ -95,5 +93,5 @@ export async function POST(req: NextRequest) {
     console.error('Lark send error:', err);
   }
 
-  return new NextResponse('', { status: 200 });
+  return new Response('', { status: 200 });
 }
