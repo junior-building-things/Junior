@@ -1,17 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage } from '@/lib/lark';
-import { loadMessages, saveMessages, recordEventOnce } from '@/lib/store';
-import { chat } from '@/lib/gemini';
 
-export const maxDuration = 60; // Vercel Pro: up to 60s
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const data = await req.json();
 
-  // Lark URL verification challenge
+  // Lark URL verification challenge — respond immediately, no imports
   if (data.challenge) {
     return NextResponse.json({ challenge: data.challenge });
   }
+
+  // Lazy-load heavy modules only for actual messages
+  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMessages, saveMessages, recordEventOnce }, { chat }] = await Promise.all([
+    import('@/lib/lark'),
+    import('@/lib/store'),
+    import('@/lib/gemini'),
+  ]);
 
   const header = data.header ?? {};
   const eventType = header.event_type;
