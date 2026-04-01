@@ -264,3 +264,20 @@ export async function completeNode(
   }
   return 'Node completed successfully.';
 }
+
+const PRIORITY_MAP: Record<string, string> = { P0: '0', P1: '1', P2: '2', P3: '3' };
+
+export async function updateFeatureFields(
+  projectKey: string,
+  workItemId: string,
+  fields: { name?: string; prd?: string; priority?: string },
+): Promise<string> {
+  const updates: { field_key: string; field_value: string }[] = [];
+  if (fields.name) updates.push({ field_key: 'name', field_value: fields.name });
+  if (fields.prd) updates.push({ field_key: 'wiki', field_value: fields.prd });
+  if (fields.priority && PRIORITY_MAP[fields.priority]) updates.push({ field_key: 'priority', field_value: PRIORITY_MAP[fields.priority] });
+  if (updates.length === 0) return 'No fields to update.';
+
+  await callMeegoMcp('update_field', { project_key: projectKey, work_item_id: workItemId, fields: updates });
+  return 'Feature updated successfully.';
+}

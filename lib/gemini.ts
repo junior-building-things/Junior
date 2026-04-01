@@ -104,6 +104,96 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'rename_document_section',
+    description: 'Rename a section heading in a Lark document.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL' },
+        old_heading: { type: Type.STRING, description: 'Current heading text to find' },
+        new_heading: { type: Type.STRING, description: 'New heading text to replace it with' },
+      },
+      required: ['doc_url', 'old_heading', 'new_heading'],
+    },
+  },
+  {
+    name: 'comment_document',
+    description: 'Add a comment to a Lark document, optionally referencing a specific section.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL' },
+        content: { type: Type.STRING, description: 'Comment text' },
+        section: { type: Type.STRING, description: 'Optional: section heading to quote in the comment' },
+      },
+      required: ['doc_url', 'content'],
+    },
+  },
+  {
+    name: 'list_document_comments',
+    description: 'List comments on a Lark document, optionally filtered by search text.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL' },
+        search_text: { type: Type.STRING, description: 'Optional: filter comments containing this text' },
+      },
+      required: ['doc_url'],
+    },
+  },
+  {
+    name: 'reply_to_comment',
+    description: 'Reply to an existing comment on a Lark document.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL' },
+        comment_id: { type: Type.STRING, description: 'The comment ID to reply to' },
+        reply_text: { type: Type.STRING, description: 'Reply text' },
+      },
+      required: ['doc_url', 'comment_id', 'reply_text'],
+    },
+  },
+  {
+    name: 'duplicate_document',
+    description: 'Duplicate/copy a Lark document. Returns the new document URL.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL to copy' },
+        new_name: { type: Type.STRING, description: 'Optional: name for the copied document' },
+      },
+      required: ['doc_url'],
+    },
+  },
+  {
+    name: 'get_package_qr',
+    description: 'Get the latest package download URL (APK/IPA) for a feature by searching its Lark group chat messages. Requires feature name and optionally Meego URL to find the right chat.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        feature_name: { type: Type.STRING, description: 'Feature name to search for the group chat' },
+        meego_url: { type: Type.STRING, description: 'Optional: Meego URL to match chat by work item ID' },
+      },
+      required: ['feature_name'],
+    },
+  },
+  {
+    name: 'update_feature',
+    description: 'Update a feature\'s name, PRD URL, or priority in Meego.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        project_key: { type: Type.STRING, description: 'Meego project key (e.g. "TikTok")' },
+        work_item_id: { type: Type.STRING, description: 'The work item ID number' },
+        name: { type: Type.STRING, description: 'New feature name' },
+        prd: { type: Type.STRING, description: 'New PRD URL' },
+        priority: { type: Type.STRING, description: 'New priority (P0-P3)' },
+      },
+      required: ['project_key', 'work_item_id'],
+    },
+  },
+  {
     name: 'get_stock_price',
     description: 'Get the current stock price and market cap for a given ticker symbol.',
     parameters: {
@@ -167,6 +257,46 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         );
         return 'Section added successfully.';
 
+      case 'rename_document_section':
+        await lark.renameDocSection(args.doc_url as string, args.old_heading as string, args.new_heading as string);
+        return 'Section renamed successfully.';
+
+      case 'comment_document':
+        await lark.addDocComment(args.doc_url as string, args.content as string, args.section as string | undefined);
+        return 'Comment added successfully.';
+
+      case 'list_document_comments': {
+        const comments = await lark.listDocComments(args.doc_url as string, args.search_text as string | undefined);
+        if (comments.length === 0) return 'No comments found.';
+        return comments.map(c =>
+          `[${c.commentId}] ${c.quote ? `"${c.quote.slice(0, 50)}" — ` : ''}${c.content}${c.replies.length > 0 ? ` (${c.replies.length} replies)` : ''}`
+        ).join('\n');
+      }
+
+      case 'reply_to_comment':
+        await lark.replyToComment(args.doc_url as string, args.comment_id as string, args.reply_text as string);
+        return 'Reply added successfully.';
+
+      case 'duplicate_document': {
+        const newUrl = await lark.duplicateDoc(args.doc_url as string, args.new_name as string | undefined);
+        return `Document duplicated: ${newUrl}`;
+      }
+
+      case 'get_package_qr': {
+        const chatId = await lark.joinFeatureChat(args.feature_name as string, args.meego_url as string | undefined);
+        if (!chatId) return `Could not find a group chat for "${args.feature_name}".`;
+        const result = await lark.getPackageQrUrl(chatId);
+        if (!result) return 'No recent package release found in the chat.';
+        return `Latest package download URL: ${result.downloadUrl}`;
+      }
+
+      case 'update_feature':
+        return await meego.updateFeatureFields(
+          args.project_key as string,
+          args.work_item_id as string,
+          { name: args.name as string | undefined, prd: args.prd as string | undefined, priority: args.priority as string | undefined },
+        );
+
       case 'get_stock_price':
         return await getStockPrice(args.ticker as string);
 
@@ -213,8 +343,9 @@ async function getStockPrice(ticker: string): Promise<string> {
 const SYSTEM_PROMPT = `You are Junior, a friendly and capable AI assistant in a Lark group chat.
 
 You have access to tools for:
-- **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes
-- **Documents (Lark)**: Read, edit sections, and add sections to Lark documents; create PRD from template
+- **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes, update feature fields (name, PRD, priority)
+- **Documents (Lark)**: Read, edit sections, rename sections, add sections, add/list/reply to comments, duplicate documents, create PRD from template
+- **Package builds**: Get the latest package download URL (APK/IPA) for a feature from its Lark group chat
 - **Finance**: Get stock prices and market data
 
 Behavior guidelines:

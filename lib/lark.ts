@@ -272,6 +272,238 @@ export async function addDocSection(
   if (data.code !== 0) throw new Error(`Create blocks error ${data.code}: ${data.msg}`);
 }
 
+// ─── Rename section ─────────────────────────────────────────────────────────
+
+export async function renameDocSection(docUrl: string, oldHeading: string, newHeading: string): Promise<void> {
+  const docId = await resolveDocId(docUrl);
+  const token = await getTenantToken();
+  const blocks = await getDocBlocks(docId, token);
+
+  const pageBlock = blocks.find(b => b.block_type === 1);
+  if (!pageBlock?.children) throw new Error('Empty document');
+
+  const byId = new Map(blocks.map(b => [b.block_id, b]));
+  const topLevel = pageBlock.children.map(id => byId.get(id)).filter((b): b is LarkBlock => !!b);
+
+  for (const block of topLevel) {
+    if (HEADING_TYPES.has(block.block_type) && blockText(block).toLowerCase().includes(oldHeading.toLowerCase())) {
+      await batchUpdateBlocks(docId, [{
+        block_id: block.block_id,
+        update_text_elements: { elements: [{ text_run: { content: newHeading, text_element_style: {} } }] },
+      }], token);
+      return;
+    }
+  }
+  throw new Error(`Section "${oldHeading}" not found`);
+}
+
+// ─── Document comments ──────────────────────────────────────────────────────
+
+export async function addDocComment(docUrl: string, content: string, section?: string): Promise<void> {
+  const docId = await resolveDocId(docUrl);
+  const token = await getTenantToken();
+
+  const elements: Array<{ type: string; text_run: { text: string } }> = [];
+
+  if (section) {
+    const blocks = await getDocBlocks(docId, token);
+    const byId = new Map(blocks.map(b => [b.block_id, b]));
+    const pageBlock = blocks.find(b => b.block_type === 1);
+    if (pageBlock?.children) {
+      const topLevel = pageBlock.children.map(id => byId.get(id)).filter((b): b is LarkBlock => !!b);
+      let foundHeading = false;
+      const sectionTexts: string[] = [];
+      for (const block of topLevel) {
+        if (HEADING_TYPES.has(block.block_type)) {
+          if (foundHeading) break;
+          if (blockText(block).toLowerCase().includes(section.toLowerCase())) foundHeading = true;
+        } else if (foundHeading) {
+          const t = blockText(block).trim();
+          if (t) sectionTexts.push(t);
+        }
+      }
+      const quoted = sectionTexts.join(' ').slice(0, 300);
+      elements.push({ type: 'text_run', text_run: { text: quoted ? `Re: "${section}"\n> ${quoted}\n\n` : `Re: "${section}"\n\n` } });
+    }
+  }
+
+  elements.push({ type: 'text_run', text_run: { text: content } });
+
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments?file_type=docx`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reply_list: { replies: [{ content: { elements } }] } }),
+  });
+  const data = await res.json() as { code: number; msg?: string };
+  if (data.code !== 0) throw new Error(`Comment error ${data.code}: ${data.msg}`);
+}
+
+export async function listDocComments(
+  docUrl: string,
+  searchText?: string,
+): Promise<Array<{ commentId: string; quote: string; content: string; replies: Array<{ content: string }> }>> {
+  const docId = await resolveDocId(docUrl);
+  const token = await getTenantToken();
+
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments?file_type=docx&page_size=50`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json() as {
+    code: number; msg?: string;
+    data?: { items?: Array<{
+      comment_id: string;
+      quote: string;
+      reply_list?: { replies?: Array<{ content?: { elements?: Array<{ text_run?: { text?: string } }> } }> };
+    }> };
+  };
+  if (data.code !== 0) throw new Error(`List comments error ${data.code}: ${data.msg}`);
+
+  const items = (data.data?.items ?? []).map(c => {
+    const replies = (c.reply_list?.replies ?? []).map(r =>
+      ({ content: (r.content?.elements ?? []).map(e => e.text_run?.text ?? '').join('') })
+    );
+    return { commentId: c.comment_id, quote: c.quote ?? '', content: replies[0]?.content ?? '', replies: replies.slice(1) };
+  });
+
+  if (searchText) {
+    const term = searchText.toLowerCase();
+    return items.filter(c => c.quote.toLowerCase().includes(term) || c.content.toLowerCase().includes(term));
+  }
+  return items;
+}
+
+export async function replyToComment(docUrl: string, commentId: string, replyText: string): Promise<void> {
+  const docId = await resolveDocId(docUrl);
+  const token = await getTenantToken();
+
+  const res = await fetch(
+    `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: { elements: [{ type: 'text_run', text_run: { text: replyText } }] } }),
+    },
+  );
+  const data = await res.json() as { code: number; msg?: string };
+  if (data.code !== 0) throw new Error(`Reply error ${data.code}: ${data.msg}`);
+}
+
+// ─── Duplicate document ─────────────────────────────────────────────────────
+
+async function getRootFolderToken(token: string): Promise<string> {
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/drive/explorer/v2/root_folder/meta`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json() as { code: number; data?: { token: string } };
+  if (data.code !== 0) throw new Error(`Root folder error ${data.code}`);
+  return data.data!.token;
+}
+
+export async function duplicateDoc(docUrl: string, newName?: string): Promise<string> {
+  const docId = await resolveDocId(docUrl);
+  const token = await getTenantToken();
+  const folderToken = await getRootFolderToken(token);
+
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/copy`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName ?? 'Copy', type: 'docx', folder_token: folderToken }),
+  });
+  const data = await res.json() as { code: number; data?: { file?: { token?: string; url?: string } } };
+  if (data.code !== 0) throw new Error(`Copy error ${data.code}`);
+  const fileToken = data.data?.file?.token ?? '';
+  return data.data?.file?.url ?? `https://bytedance.sg.larkoffice.com/docx/${fileToken}`;
+}
+
+// ─── Feature chat + package QR ──────────────────────────────────────────────
+
+export async function joinFeatureChat(featureName: string, meegoUrl?: string): Promise<string | null> {
+  if (!featureName) return null;
+  const botToken = await getTenantToken();
+
+  const searchRes = await fetch(
+    `${LARK_BASE_URL}/open-apis/im/v1/chats/search?query=${encodeURIComponent(featureName)}&page_size=20`,
+    { headers: { Authorization: `Bearer ${botToken}` } },
+  );
+  const searchData = await searchRes.json() as {
+    code: number; data?: { items?: Array<{ chat_id: string; name: string }> };
+  };
+  if (searchData.code !== 0) return null;
+
+  const chats = searchData.data?.items ?? [];
+  if (chats.length === 0) return null;
+
+  const EXCLUDE = ['libra', 'checkpoint', '管控'];
+  const candidates = chats.filter(c => !EXCLUDE.some(p => c.name.toLowerCase().includes(p)));
+
+  const meegoId = meegoUrl?.match(/\/detail\/(\d+)/)?.[1] ?? '';
+  let bestChat: { chat_id: string; name: string } | null = null;
+
+  if (meegoId) {
+    for (const c of candidates) {
+      try {
+        const infoRes = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/chats/${c.chat_id}`, {
+          headers: { Authorization: `Bearer ${botToken}` },
+        });
+        const infoData = await infoRes.json() as { code: number; data?: Record<string, unknown> };
+        if (infoData.code === 0 && String(infoData.data?.description ?? '').includes(meegoId)) {
+          bestChat = c;
+          break;
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  if (!bestChat && candidates.length > 0) bestChat = candidates[0];
+  if (!bestChat) return null;
+
+  // Try to join the chat
+  await fetch(
+    `${LARK_BASE_URL}/open-apis/im/v1/chats/${bestChat.chat_id}/members?member_id_type=app_id`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id_list: [LARK_APP_ID] }),
+    },
+  ).catch(() => {});
+
+  return bestChat.chat_id;
+}
+
+export async function getPackageQrUrl(chatId: string): Promise<{ downloadUrl: string } | null> {
+  const token = await getTenantToken();
+
+  const res = await fetch(
+    `${LARK_BASE_URL}/open-apis/im/v1/messages?container_id_type=chat&container_id=${chatId}&page_size=50&sort_type=ByCreateTimeDesc`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const data = await res.json() as {
+    code: number; data?: { items?: Array<{ body?: { content?: string } }> };
+  };
+  if (data.code !== 0) return null;
+
+  for (const msg of data.data?.items ?? []) {
+    const content = msg.body?.content ?? '';
+    if (!content.includes('released') && !content.includes('artifacts') && !content.includes('已发布')) continue;
+
+    const patterns = [
+      /https:\/\/ttidevops[^"'\s]+package_id=\d+/,
+      /https:\/\/voffline\.byted\.org\/download[^"'\s]+\.(?:apk|ipa)/,
+      /https:\/\/[^"'\s]+\.(?:apk|ipa)/,
+    ];
+
+    for (const pattern of patterns) {
+      const match = content.match(pattern);
+      if (match) {
+        const url = match[0];
+        if (/ttlite|lite_android|lite_ios|app-lite/i.test(url)) continue;
+        return { downloadUrl: url };
+      }
+    }
+  }
+  return null;
+}
+
 // ─── Copy PRD template ──────────────────────────────────────────────────────
 
 const WIKI_NODE_TOKEN = 'RUOXwaQVaiPKAOkjoywcTRdynuf';
