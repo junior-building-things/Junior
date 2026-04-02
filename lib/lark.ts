@@ -85,6 +85,51 @@ export async function reactToMessage(messageId: string, emoji: string): Promise<
   }).catch(() => {}); // best-effort
 }
 
+// ─── Compliance card ────────────────────────────────────────────────────────
+
+const COMPLIANCE_CHAT_ID = 'oc_d1f9b0ad6b325ef6699e0422fa1e8541';
+
+export async function sendComplianceCard(params: {
+  featureName: string;
+  prdUrl: string;
+  description: string;
+  priority: string;
+  meegoUrl: string;
+}): Promise<void> {
+  const { featureName, prdUrl, description, priority, meegoUrl } = params;
+  const token = await getTenantToken();
+
+  const card = {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'orange',
+      title: { tag: 'plain_text', content: '🆕 New Feature — Compliance Review Needed' },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: [
+          `**Feature:** ${featureName}`,
+          `**Priority:** ${priority}`,
+          description ? `**Description:** ${description}` : '',
+          `**Meego:** [Open in Meego](${meegoUrl})`,
+          prdUrl ? `**PRD:** [Open PRD](${prdUrl})` : '**PRD:** Not created',
+        ].filter(Boolean).join('\n'),
+      },
+    ],
+  };
+
+  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_id: COMPLIANCE_CHAT_ID,
+      msg_type: 'interactive',
+      content: JSON.stringify(card),
+    }),
+  });
+}
+
 // ─── Should reply check ──────────────────────────────────────────────────────
 
 export function shouldReply(event: Record<string, unknown>): boolean {

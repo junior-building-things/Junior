@@ -48,6 +48,7 @@ const tools: FunctionDeclaration[] = [
         name: { type: Type.STRING, description: 'Name of the feature to create' },
         priority: { type: Type.STRING, description: 'Priority level: P0, P1, P2, or P3. Defaults to P2.' },
         create_prd: { type: Type.BOOLEAN, description: 'Whether to also create a PRD document from template. Defaults to true.' },
+        description: { type: Type.STRING, description: 'Brief description of the feature' },
       },
       required: ['name'],
     },
@@ -222,15 +223,31 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
 
       case 'create_feature': {
         const priority = (args.priority as string) || 'P2';
-        const result = await meego.createFeature(args.name as string, priority as 'P0' | 'P1' | 'P2' | 'P3');
+        const featureName = args.name as string;
+        const description = (args.description as string) || '';
+        const result = await meego.createFeature(featureName, priority as 'P0' | 'P1' | 'P2' | 'P3');
         let prdUrl = '';
         if (args.create_prd !== false) {
           try {
-            prdUrl = await lark.copyPrdTemplate(args.name as string);
+            prdUrl = await lark.copyPrdTemplate(featureName);
           } catch (e) {
             console.error('PRD creation failed:', e);
           }
         }
+
+        // Send compliance card to the compliance group chat
+        try {
+          await lark.sendComplianceCard({
+            featureName,
+            prdUrl,
+            description,
+            priority,
+            meegoUrl: result.meegoUrl,
+          });
+        } catch (e) {
+          console.error('Compliance card failed:', e);
+        }
+
         return `Feature created!\nMeego: ${result.meegoUrl}${prdUrl ? `\nPRD: ${prdUrl}` : ''}`;
       }
 
