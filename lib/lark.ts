@@ -825,7 +825,11 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
       if (messages.length === 0) { emptyChats++; continue; }
 
       // Only include chats where the user sent a message
-      if (!messages.some(m => m.sender_id === userOpenId)) continue;
+      const senderIds = [...new Set(messages.map(m => m.sender_id))];
+      if (!messages.some(m => m.sender_id === userOpenId)) {
+        if (messages.length > 0) console.log(`Skipped ${chat.name}: senders=${JSON.stringify(senderIds.slice(0, 3))}, looking for=${userOpenId}`);
+        continue;
+      }
 
       const lines = messages
         .filter(m => m.sender_id !== botOpenId)
