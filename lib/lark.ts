@@ -730,9 +730,12 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
   const botOpenId = process.env.LARK_BOT_OPEN_ID ?? '';
 
   const chats = await listUserChats(userToken);
+  console.log(`Found ${chats.length} chats, types:`, chats.slice(0, 5).map(c => `${c.name}(${c.chat_type})`));
   if (chats.length === 0) return 'No chats found.';
 
   const results: Array<{ name: string; lines: string[] }> = [];
+  let totalMessages = 0;
+  let emptyChats = 0;
 
   // Fetch in batches of 5
   for (let i = 0; i < chats.length; i += 5) {
@@ -742,14 +745,16 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
         try {
           const messages = await listChatMessages(chat.chat_id, startTime, endTime, userToken);
           return { chat, messages };
-        } catch {
+        } catch (e) {
+          console.error(`Failed to fetch messages for ${chat.name}:`, e);
           return { chat, messages: [] };
         }
       }),
     );
 
     for (const { chat, messages } of batchResults) {
-      if (messages.length === 0) continue;
+      totalMessages += messages.length;
+      if (messages.length === 0) { emptyChats++; continue; }
 
       // Filter: P2P → include all; Group → only if user sent or was mentioned
       if (chat.chat_type === 'group') {
@@ -773,6 +778,7 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
     }
   }
 
+  console.log(`Stats: ${chats.length} chats, ${emptyChats} empty, ${totalMessages} total messages, ${results.length} matched`);
   if (results.length === 0) return `No conversations found in the last ${days} day(s).`;
 
   // Truncate if total messages exceed 2000
