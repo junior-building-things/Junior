@@ -489,5 +489,10 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     });
   }
 
-  return response.text ?? 'No response generated.';
+  console.log('Final response:', JSON.stringify(response.candidates?.[0]?.content?.parts?.map(p => ({ text: p.text, fc: p.functionCall?.name }))));
+  // Fall back to manually extracting text from parts
+  if (response.text) return response.text;
+  const finalParts = response.candidates?.[0]?.content?.parts ?? [];
+  const textContent = finalParts.map(p => p.text ?? '').join('').trim();
+  return textContent || 'No response generated.';
 }
