@@ -34,7 +34,7 @@ let userTokenExpiresAt = 0;
 const GCP_PROJECT = process.env.GCP_PROJECT ?? 'tiktok-im';
 const SECRET_NAME = 'lark-refresh-token';
 
-interface LarkTokens {
+export interface LarkTokens {
   access_token: string;
   refresh_token: string;
   expires_at: number; // unix ms
@@ -204,7 +204,7 @@ export async function reactToMessage(messageId: string, emoji: string): Promise<
 
 // ─── Compliance card ────────────────────────────────────────────────────────
 
-const COMPLIANCE_CHAT_ID = 'oc_d1f9b0ad6b325ef6699e0422fa1e8541';
+const COMPLIANCE_CHAT_ID = process.env.COMPLIANCE_CHAT_ID ?? '';
 
 export async function sendComplianceCard(params: {
   featureName: string;
@@ -213,6 +213,10 @@ export async function sendComplianceCard(params: {
   priority: string;
   meegoUrl: string;
 }): Promise<void> {
+  if (!COMPLIANCE_CHAT_ID) {
+    console.warn('COMPLIANCE_CHAT_ID not configured, skipping compliance card');
+    return;
+  }
   const { featureName, prdUrl, description, priority, meegoUrl } = params;
   const token = await getTenantToken();
 
@@ -668,9 +672,10 @@ export async function getPackageQrUrl(chatId: string): Promise<{ downloadUrl: st
 
 // ─── Copy PRD template ──────────────────────────────────────────────────────
 
-const WIKI_NODE_TOKEN = 'RUOXwaQVaiPKAOkjoywcTRdynuf';
+const WIKI_NODE_TOKEN = process.env.PRD_TEMPLATE_WIKI_TOKEN ?? '';
 
 export async function copyPrdTemplate(featureName: string, description?: string): Promise<string> {
+  if (!WIKI_NODE_TOKEN) throw new Error('PRD_TEMPLATE_WIKI_TOKEN not configured');
   const token = await getTenantToken();
 
   // Get wiki node obj_token

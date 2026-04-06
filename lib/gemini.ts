@@ -428,7 +428,12 @@ Behavior guidelines:
 
 // ─── Main chat function ──────────────────────────────────────────────────────
 
+const CHAT_TIMEOUT_MS = 30_000;
+
 export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
+  // Abort the entire chat flow if it exceeds the timeout
+  const abort = AbortSignal.timeout(CHAT_TIMEOUT_MS);
+
   // Filter out corrupted history pairs from previous failures
   const ERROR_PATTERNS = ['No response generated.', "couldn't retrieve", "don't have the necessary permissions", 'encountered an error', 'showing as'];
   const cleanHistory: ChatMessage[] = [];
@@ -449,42 +454,55 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     parts: [{ text: m.content }],
   }));
 
-  const chatSession = ai.chats.create({
-    model: MODEL,
-    history: chatHistory,
-    config: {
-      systemInstruction: SYSTEM_PROMPT,
-      tools: [{ functionDeclarations: tools }],
-      toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
-    },
-  });
+  try {
+    const chatSession = ai.chats.create({
+      model: MODEL,
+      history: chatHistory,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        tools: [{ functionDeclarations: tools }],
+        toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
+      },
+    });
 
-  let response = await chatSession.sendMessage({ message: userMessage });
+    let response = await chatSession.sendMessage({
+      message: userMessage,
+      config: { abortSignal: abort },
+    });
 
-  // Handle multi-turn function calling (up to 5 rounds)
-  for (let i = 0; i < 5; i++) {
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const functionCalls = parts.filter(p => p.functionCall);
-    if (functionCalls.length === 0) break;
+    // Handle multi-turn function calling (up to 5 rounds)
+    for (let i = 0; i < 5; i++) {
+      if (abort.aborted) throw new DOMException('Timed out', 'TimeoutError');
 
-    // Execute all function calls
-    const functionResponses = [];
-    for (const p of functionCalls) {
-      const fc = p.functionCall!;
-      const name = fc.name ?? 'unknown';
-      const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
-      let output: Record<string, unknown>;
-      try { output = JSON.parse(result) as Record<string, unknown>; } catch { output = { text: result }; }
-      functionResponses.push({ id: fc.id ?? '', name, response: output });
+      const parts = response.candidates?.[0]?.content?.parts ?? [];
+      const functionCalls = parts.filter(p => p.functionCall);
+      if (functionCalls.length === 0) break;
+
+      // Execute all function calls
+      const functionResponses = [];
+      for (const p of functionCalls) {
+        const fc = p.functionCall!;
+        const name = fc.name ?? 'unknown';
+        const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
+        let output: Record<string, unknown>;
+        try { output = JSON.parse(result) as Record<string, unknown>; } catch { output = { text: result }; }
+        functionResponses.push({ id: fc.id ?? '', name, response: output });
+      }
+
+      // Send function responses back via the chat session
+      response = await chatSession.sendMessage({
+        message: functionResponses.map(fr => ({
+          functionResponse: fr,
+        })),
+        config: { abortSignal: abort },
+      });
     }
 
-    // Send function responses back via the chat session
-    response = await chatSession.sendMessage({
-      message: functionResponses.map(fr => ({
-        functionResponse: fr,
-      })),
-    });
+    return response.text ?? 'No response generated.';
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      return 'Sorry, that took too long. Try a simpler question or try again?';
+    }
+    throw err;
   }
-
-  return response.text ?? 'No response generated.';
 }

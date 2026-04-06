@@ -1,9 +1,39 @@
+import { createHmac } from 'crypto';
+
+const LARK_VERIFICATION_TOKEN = process.env.LARK_VERIFICATION_TOKEN ?? '';
+const LARK_ENCRYPT_KEY = process.env.LARK_ENCRYPT_KEY ?? '';
+
+function verifySignature(req: Request, body: string): boolean {
+  // If no signing secret is configured, skip verification (dev mode)
+  if (!LARK_ENCRYPT_KEY) return true;
+
+  const timestamp = req.headers.get('X-Lark-Request-Timestamp') ?? '';
+  const nonce = req.headers.get('X-Lark-Request-Nonce') ?? '';
+  const signature = req.headers.get('X-Lark-Signature') ?? '';
+  if (!timestamp || !nonce || !signature) return false;
+
+  const expected = createHmac('sha256', LARK_ENCRYPT_KEY)
+    .update(timestamp + nonce + LARK_ENCRYPT_KEY + body)
+    .digest('hex');
+  return expected === signature;
+}
+
 export async function POST(req: Request) {
-  const data = await req.json();
+  const rawBody = await req.text();
+  const data = JSON.parse(rawBody);
 
   // Lark URL verification challenge — respond immediately, no imports
   if (data.challenge) {
+    // Optionally verify token if configured
+    if (LARK_VERIFICATION_TOKEN && data.token !== LARK_VERIFICATION_TOKEN) {
+      return new Response('Invalid verification token', { status: 403 });
+    }
     return Response.json({ challenge: data.challenge });
+  }
+
+  // Verify request signature for all non-challenge requests
+  if (!verifySignature(req, rawBody)) {
+    return new Response('Invalid signature', { status: 403 });
   }
 
   // Lazy-load heavy modules only for actual messages
