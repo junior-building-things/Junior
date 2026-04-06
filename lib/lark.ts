@@ -690,16 +690,16 @@ export async function copyPrdTemplate(featureName: string, description?: string)
 
 // ─── Conversation summary ───────────────────────────────────────────────────
 
-export async function listUserChats(userToken: string): Promise<Array<{ chat_id: string; name: string; chat_type: string }>> {
-  const chats: Array<{ chat_id: string; name: string; chat_type: string }> = [];
+export async function listUserChats(userToken: string): Promise<Array<{ chat_id: string; name: string; chat_mode?: string; [key: string]: unknown }>> {
+  const chats: Array<{ chat_id: string; name: string; chat_mode?: string; [key: string]: unknown }> = [];
   let pageToken = '';
 
   for (let page = 0; page < 2; page++) {
-    const url = `${LARK_BASE_URL}/open-apis/im/v1/chats?page_size=100${pageToken ? `&page_token=${pageToken}` : ''}`;
+    const url = `${LARK_BASE_URL}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id${pageToken ? `&page_token=${pageToken}` : ''}`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${userToken}` } });
     const data = await res.json() as {
       code: number;
-      data?: { items?: Array<{ chat_id: string; name: string; chat_type: string }>; page_token?: string; has_more?: boolean };
+      data?: { items?: Array<{ chat_id: string; name: string; chat_mode?: string; [key: string]: unknown }>; page_token?: string; has_more?: boolean };
     };
     console.log(`listUserChats page ${page}: code=${data.code}, items=${data.data?.items?.length ?? 0}`, data.code !== 0 ? JSON.stringify(data).slice(0, 300) : '');
     if (data.code !== 0) break;
@@ -775,9 +775,7 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
   const botOpenId = process.env.LARK_BOT_OPEN_ID ?? '';
 
   const chats = await listUserChats(userToken);
-  console.log(`Found ${chats.length} chats, types:`, chats.slice(0, 5).map(c => `${c.name}(${c.chat_type})`));
-  if (chats.length > 0) console.log('Sample chat keys:', JSON.stringify(Object.keys(chats[0])));
-  if (chats.length > 0) console.log('Sample chat:', JSON.stringify(chats[0]).slice(0, 300));
+  console.log(`Found ${chats.length} chats, modes:`, chats.slice(0, 5).map(c => `${c.name}(${c.chat_mode})`));
   if (chats.length === 0) return 'No chats found.';
 
   const results: Array<{ name: string; lines: string[] }> = [];
@@ -804,7 +802,7 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
       if (messages.length === 0) { emptyChats++; continue; }
 
       // Filter: P2P → include all; Group → only if user sent or was mentioned
-      if (chat.chat_type === 'group') {
+      if (chat.chat_mode !== 'p2p') {
         const userInvolved = messages.some(
           m => m.sender_id === userOpenId || m.mentions.includes(userOpenId),
         );
