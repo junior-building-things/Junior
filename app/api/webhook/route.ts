@@ -69,7 +69,7 @@ export async function POST(req: Request) {
 
   let reply: string;
   try {
-    reply = await chat(history, userText);
+    reply = await chat(history, userText, { senderOpenId, senderName });
   } catch (err) {
     console.error('Gemini error:', err);
     reply = "Sorry, I hit an error processing that. Try again?";

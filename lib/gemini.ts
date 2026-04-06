@@ -205,11 +205,28 @@ const tools: FunctionDeclaration[] = [
       required: ['ticker'],
     },
   },
+  {
+    name: 'whoami',
+    description: 'Get the current user\'s Lark identity info (open_id, name). Use when the user asks "who am I", "what\'s my open id", or similar.',
+    parameters: { type: Type.OBJECT, properties: {} },
+  },
+  {
+    name: 'summarize_conversations',
+    description: 'Fetch and summarize all Lark conversations from the last N days. Includes all DM chats and group chats where the user sent a message or was mentioned. Use when the user asks to summarize recent messages, conversations, or chats.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        days: { type: Type.NUMBER, description: 'Number of days to look back: 1, 2, or 7. Default 1.' },
+      },
+    },
+  },
 ];
 
 // ─── Tool execution ──────────────────────────────────────────────────────────
 
-async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+interface ChatContext { senderOpenId?: string; senderName?: string }
+
+async function executeTool(name: string, args: Record<string, unknown>, ctx: ChatContext = {}): Promise<string> {
   try {
     switch (name) {
       case 'get_my_features':
@@ -317,6 +334,27 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       case 'get_stock_price':
         return await getStockPrice(args.ticker as string);
 
+      case 'whoami':
+        return `Open ID: ${ctx.senderOpenId ?? 'unknown'}\nName: ${ctx.senderName ?? 'unknown'}`;
+
+      case 'summarize_conversations': {
+        const userToken = process.env.MEEGO_USER_TOKEN;
+        const userOpenId = process.env.LARK_USER_OPEN_ID;
+        if (!userToken) return 'User token not configured (MEEGO_USER_TOKEN).';
+        if (!userOpenId) return 'User open ID not configured (LARK_USER_OPEN_ID).';
+
+        const days = Math.min(Math.max(Math.round(Number(args.days) || 1), 1), 7);
+        const rawConversations = await lark.fetchRecentConversations(userToken, userOpenId, days);
+        if (rawConversations.startsWith('No ')) return rawConversations;
+
+        const summaryResponse = await ai.models.generateContent({
+          model: MODEL,
+          contents: [{ role: 'user', parts: [{ text: rawConversations }] }],
+          config: { systemInstruction: CONVERSATION_SUMMARY_PROMPT },
+        });
+        return summaryResponse.text ?? 'Could not generate summary.';
+      }
+
       default:
         return `Unknown tool: ${name}`;
     }
@@ -355,7 +393,17 @@ async function getStockPrice(ticker: string): Promise<string> {
   return parts.join(' | ');
 }
 
-// ─── System prompt ───────────────────────────────────────────────────────────
+// ─── Prompts ────────────────────────────────────────────────────────────────
+
+const CONVERSATION_SUMMARY_PROMPT = `You are summarizing a user's Lark conversations from the past few days.
+
+Rules:
+- Group the summary by topics/themes (e.g. "Design Reviews", "Deployment Issues", "Product Decisions"), NOT by chat
+- For each topic: provide a simple summary of what was discussed/aligned and who was involved
+- For each topic: assess whether this workflow could feasibly be automated by AI, a Lark bot, or an agent. If yes, briefly suggest how
+- Keep the original language of the messages (don't translate Chinese to English or vice versa)
+- Skip trivial messages (greetings, emoji-only, thumbs up)
+- Be concise and actionable`;
 
 const SYSTEM_PROMPT = `You are Junior, a friendly and capable AI assistant in a Lark group chat.
 
@@ -364,6 +412,7 @@ You have access to tools for:
 - **Documents (Lark)**: Read, edit sections, rename sections, add sections, add/list/reply to comments, duplicate documents, create PRD from template
 - **Package builds**: Get the latest package download URL (APK/IPA) for a feature from its Lark group chat
 - **Finance**: Get stock prices and market data
+- **Conversations**: Summarize all Lark conversations from the last 1, 2, or 7 days, grouped by topic with automation suggestions
 
 Behavior guidelines:
 - Be concise and natural in conversation. Keep replies short unless detail is needed.
@@ -373,11 +422,12 @@ Behavior guidelines:
 - When showing feature info, include relevant links (Meego, PRD).
 - If a question is ambiguous, ask for clarification before taking action.
 - You can handle both English and Chinese messages.
-- Don't apologize excessively. Just do the thing.`;
+- Don't apologize excessively. Just do the thing.
+- When the user asks to summarize conversations, messages, or chats from recent days/today/this week, use the summarize_conversations tool.`;
 
 // ─── Main chat function ──────────────────────────────────────────────────────
 
-export async function chat(history: ChatMessage[], userMessage: string): Promise<string> {
+export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
   const contents = history.map(m => ({
     role: m.role,
     parts: [{ text: m.content }],
@@ -407,7 +457,7 @@ export async function chat(history: ChatMessage[], userMessage: string): Promise
       functionCalls.map(async (p) => {
         const fc = p.functionCall!;
         const name = fc.name ?? 'unknown';
-        const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>);
+        const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
         return { name, response: { result } };
       }),
     );

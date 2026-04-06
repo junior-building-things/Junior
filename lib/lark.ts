@@ -593,3 +593,146 @@ export async function copyPrdTemplate(featureName: string, description?: string)
 
   return prdUrl;
 }
+
+// ─── Conversation summary ───────────────────────────────────────────────────
+
+export async function listUserChats(userToken: string): Promise<Array<{ chat_id: string; name: string; chat_type: string }>> {
+  const chats: Array<{ chat_id: string; name: string; chat_type: string }> = [];
+  let pageToken = '';
+
+  for (let page = 0; page < 2; page++) {
+    const url = `${LARK_BASE_URL}/open-apis/im/v1/chats?page_size=100${pageToken ? `&page_token=${pageToken}` : ''}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${userToken}` } });
+    const data = await res.json() as {
+      code: number;
+      data?: { items?: Array<{ chat_id: string; name: string; chat_type: string }>; page_token?: string; has_more?: boolean };
+    };
+    if (data.code !== 0) break;
+    chats.push(...(data.data?.items ?? []));
+    if (!data.data?.has_more) break;
+    pageToken = data.data?.page_token ?? '';
+  }
+
+  return chats;
+}
+
+export async function listChatMessages(
+  chatId: string,
+  startTime: number,
+  endTime: number,
+  userToken: string,
+): Promise<Array<{ sender_id: string; content: string; create_time: string; mentions: string[] }>> {
+  const messages: Array<{ sender_id: string; content: string; create_time: string; mentions: string[] }> = [];
+  let pageToken = '';
+
+  for (let page = 0; page < 4; page++) {
+    const url = `${LARK_BASE_URL}/open-apis/im/v1/messages?container_id_type=chat&container_id=${chatId}&start_time=${startTime}&end_time=${endTime}&page_size=50&sort_type=ByCreateTimeAsc${pageToken ? `&page_token=${pageToken}` : ''}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${userToken}` } });
+    const data = await res.json() as {
+      code: number;
+      data?: {
+        items?: Array<{
+          sender: { sender_id: string };
+          body?: { content?: string };
+          msg_type: string;
+          create_time: string;
+          mentions?: Array<{ id: { open_id?: string } }>;
+        }>;
+        page_token?: string;
+        has_more?: boolean;
+      };
+    };
+    if (data.code !== 0) break;
+
+    for (const msg of data.data?.items ?? []) {
+      let content = '';
+      const rawContent = msg.body?.content ?? '';
+      try {
+        if (msg.msg_type === 'text') {
+          content = (JSON.parse(rawContent) as { text?: string }).text ?? '';
+        } else if (msg.msg_type === 'interactive') {
+          const card = JSON.parse(rawContent) as { header?: { title?: { content?: string } } };
+          content = `[card: ${card.header?.title?.content ?? 'untitled'}]`;
+        } else {
+          content = `[${msg.msg_type}]`;
+        }
+      } catch {
+        content = rawContent || `[${msg.msg_type}]`;
+      }
+
+      const mentions = (msg.mentions ?? []).map(m => m.id?.open_id ?? '').filter(Boolean);
+      messages.push({ sender_id: msg.sender.sender_id, content, create_time: msg.create_time, mentions });
+    }
+
+    if (!data.data?.has_more) break;
+    pageToken = data.data?.page_token ?? '';
+  }
+
+  return messages;
+}
+
+export async function fetchRecentConversations(userToken: string, userOpenId: string, days: number = 1): Promise<string> {
+  const endTime = Math.floor(Date.now() / 1000);
+  const startTime = endTime - days * 86400;
+  const botOpenId = process.env.LARK_BOT_OPEN_ID ?? '';
+
+  const chats = await listUserChats(userToken);
+  if (chats.length === 0) return 'No chats found.';
+
+  const results: Array<{ name: string; lines: string[] }> = [];
+
+  // Fetch in batches of 5
+  for (let i = 0; i < chats.length; i += 5) {
+    const batch = chats.slice(i, i + 5);
+    const batchResults = await Promise.all(
+      batch.map(async (chat) => {
+        try {
+          const messages = await listChatMessages(chat.chat_id, startTime, endTime, userToken);
+          return { chat, messages };
+        } catch {
+          return { chat, messages: [] };
+        }
+      }),
+    );
+
+    for (const { chat, messages } of batchResults) {
+      if (messages.length === 0) continue;
+
+      // Filter: P2P → include all; Group → only if user sent or was mentioned
+      if (chat.chat_type === 'group') {
+        const userInvolved = messages.some(
+          m => m.sender_id === userOpenId || m.mentions.includes(userOpenId),
+        );
+        if (!userInvolved) continue;
+      }
+
+      const lines = messages
+        .filter(m => m.sender_id !== botOpenId)
+        .map(m => {
+          const time = new Date(Number(m.create_time) * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+          const who = m.sender_id === userOpenId ? 'You' : m.sender_id;
+          return `[${time}] ${who}: ${m.content}`;
+        });
+
+      if (lines.length > 0) {
+        results.push({ name: chat.name || chat.chat_id, lines });
+      }
+    }
+  }
+
+  if (results.length === 0) return `No conversations found in the last ${days} day(s).`;
+
+  // Truncate if total messages exceed 2000
+  let total = results.reduce((sum, r) => sum + r.lines.length, 0);
+  if (total > 2000) {
+    const perChat = Math.floor(2000 / results.length);
+    for (const r of results) {
+      if (r.lines.length > perChat) {
+        r.lines = r.lines.slice(-perChat);
+        r.lines.unshift('(earlier messages truncated)');
+      }
+    }
+  }
+
+  return results.map(r => `=== ${r.name} ===\n${r.lines.join('\n')}`).join('\n\n');
+}
