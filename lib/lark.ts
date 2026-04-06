@@ -53,11 +53,20 @@ async function loadTokensFromSecret(): Promise<LarkTokens | null> {
     const gcpToken = await getGcpAccessToken();
     const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}/versions/latest:access`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${gcpToken}` } });
-    const data = await res.json() as { payload?: { data?: string } };
-    if (data.payload?.data) {
-      return JSON.parse(Buffer.from(data.payload.data, 'base64').toString('utf-8')) as LarkTokens;
+    const data = await res.json() as { payload?: { data?: string }; error?: { message?: string } };
+    if (data.error) {
+      console.error('Secret Manager read error:', data.error.message);
+      return null;
     }
-  } catch { /* fall through */ }
+    if (data.payload?.data) {
+      const decoded = Buffer.from(data.payload.data, 'base64').toString('utf-8');
+      const tokens = JSON.parse(decoded) as LarkTokens;
+      console.log('Loaded tokens from secret, expires_at:', new Date(tokens.expires_at).toISOString());
+      return tokens;
+    }
+  } catch (e) {
+    console.error('Failed to load tokens from secret:', e);
+  }
   return null;
 }
 
