@@ -760,6 +760,8 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
 
   const chats = await listUserChats(userToken);
   console.log(`Found ${chats.length} chats, types:`, chats.slice(0, 5).map(c => `${c.name}(${c.chat_type})`));
+  if (chats.length > 0) console.log('Sample chat keys:', JSON.stringify(Object.keys(chats[0])));
+  if (chats.length > 0) console.log('Sample chat:', JSON.stringify(chats[0]).slice(0, 300));
   if (chats.length === 0) return 'No chats found.';
 
   const results: Array<{ name: string; lines: string[] }> = [];
