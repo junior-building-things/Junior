@@ -1,7 +1,18 @@
-import { createHash } from 'crypto';
+import { createHash, createDecipheriv } from 'crypto';
 
 const LARK_VERIFICATION_TOKEN = process.env.LARK_VERIFICATION_TOKEN ?? '';
 const LARK_ENCRYPT_KEY = process.env.LARK_ENCRYPT_KEY ?? '';
+
+function decryptPayload(encrypted: string): Record<string, unknown> {
+  if (!LARK_ENCRYPT_KEY) throw new Error('Cannot decrypt without LARK_ENCRYPT_KEY');
+  const key = createHash('sha256').update(LARK_ENCRYPT_KEY).digest();
+  const buf = Buffer.from(encrypted, 'base64');
+  const iv = buf.subarray(0, 16);
+  const ciphertext = buf.subarray(16);
+  const decipher = createDecipheriv('aes-256-cbc', key, iv);
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf-8');
+  return JSON.parse(decrypted);
+}
 
 function verifySignature(req: Request, body: string): boolean {
   // If no signing secret is configured, skip verification (dev mode)
@@ -21,7 +32,17 @@ function verifySignature(req: Request, body: string): boolean {
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
-  const data = JSON.parse(rawBody);
+  let data = JSON.parse(rawBody) as Record<string, unknown>;
+
+  // Decrypt if payload is encrypted
+  if (typeof data.encrypt === 'string' && LARK_ENCRYPT_KEY) {
+    try {
+      data = decryptPayload(data.encrypt as string);
+    } catch (err) {
+      console.error('[webhook] Decryption failed:', err);
+      return new Response('Decryption failed', { status: 400 });
+    }
+  }
 
   // Lark URL verification challenge — respond immediately, no imports
   if (data.challenge) {
@@ -37,18 +58,6 @@ export async function POST(req: Request) {
     return new Response('Invalid signature', { status: 403 });
   }
 
-  // Debug: log top-level keys to diagnose silent drops
-  const topKeys = Object.keys(data);
-  const hasEncrypt = 'encrypt' in data;
-  const senderType = data.event?.sender?.sender_type;
-  console.log(`[webhook] keys=${topKeys.join(',')} encrypt=${hasEncrypt} sender_type=${senderType}`);
-
-  // If the body is encrypted, we can't process it — log and bail
-  if (hasEncrypt && !data.header) {
-    console.error('[webhook] Received encrypted payload — decryption not implemented. Set Encrypt Key to empty in Lark console or implement decryption.');
-    return new Response('', { status: 200 });
-  }
-
   // Lazy-load heavy modules only for actual messages
   const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMessages, saveMessages, recordEventOnce }, { chat }] = await Promise.all([
     import('@/lib/lark'),
@@ -56,29 +65,29 @@ export async function POST(req: Request) {
     import('@/lib/gemini'),
   ]);
 
-  const header = data.header ?? {};
+  const header = (data.header ?? {}) as Record<string, unknown>;
   const eventType = header.event_type;
   if (eventType && eventType !== 'im.message.receive_v1') {
     return new Response('', { status: 200 });
   }
 
-  const event = data.event ?? {};
+  const event = (data.event ?? {}) as Record<string, unknown>;
 
   // Prevent bot loop
-  if (event.sender?.sender_type !== 'user') {
+  const sender = (event.sender ?? {}) as Record<string, unknown>;
+  if (sender.sender_type !== 'user') {
     return new Response('', { status: 200 });
   }
 
-  const message = event.message ?? {};
-  const chatId = message.chat_id;
-  const messageId = message.message_id;
-  const sender = event.sender ?? {};
-  const senderOpenId = sender.sender_id?.open_id;
-  const senderName = sender.sender_name ?? sender.name;
+  const message = (event.message ?? {}) as Record<string, unknown>;
+  const chatId = message.chat_id as string | undefined;
+  const messageId = message.message_id as string | undefined;
+  const senderOpenId = (sender.sender_id as Record<string, unknown> | undefined)?.open_id as string | undefined;
+  const senderName = (sender.sender_name ?? sender.name) as string | undefined;
 
   let userText: string;
   try {
-    const contentObj = JSON.parse(message.content ?? '{}');
+    const contentObj = JSON.parse((message.content as string) ?? '{}');
     userText = sanitizeText(contentObj.text ?? '');
   } catch {
     return new Response('', { status: 200 });
@@ -98,7 +107,7 @@ export async function POST(req: Request) {
     : header.event_id
       ? `evt:${header.event_id}`
       : null;
-  if (dedupeKey && !(await recordEventOnce(dedupeKey))) {
+  if (dedupeKey && !(await recordEventOnce(dedupeKey as string))) {
     return new Response('', { status: 200 });
   }
 
