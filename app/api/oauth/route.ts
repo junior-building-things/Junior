@@ -52,6 +52,15 @@ export async function GET(req: Request) {
   }
 
   const d = data.data!;
+
+  // Persist refresh token to KV so it survives instance restarts
+  if (d.refresh_token && process.env.KV_REST_API_URL) {
+    try {
+      const { kv } = await import('@vercel/kv');
+      await kv.set('lark:refresh_token', d.refresh_token);
+    } catch { /* best effort */ }
+  }
+
   const body = [
     `User: ${d.name} (${d.open_id})`,
     ``,

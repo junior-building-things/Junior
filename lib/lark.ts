@@ -26,14 +26,35 @@ export async function getTenantToken(): Promise<string> {
 
 let cachedUserToken = '';
 let userTokenExpiresAt = 0;
-let currentRefreshToken = process.env.LARK_REFRESH_TOKEN ?? '';
+
+// Load/save refresh token from KV so it survives instance restarts
+async function getRefreshToken(): Promise<string> {
+  try {
+    if (process.env.KV_REST_API_URL) {
+      const mod = await import('@vercel/kv');
+      const stored = await mod.kv.get('lark:refresh_token') as string | null;
+      if (stored) return stored;
+    }
+  } catch { /* fall through */ }
+  return process.env.LARK_REFRESH_TOKEN ?? '';
+}
+
+async function saveRefreshToken(token: string): Promise<void> {
+  try {
+    if (process.env.KV_REST_API_URL) {
+      const mod = await import('@vercel/kv');
+      await mod.kv.set('lark:refresh_token', token);
+    }
+  } catch { /* best effort */ }
+}
 
 export async function getUserToken(): Promise<string | null> {
   // Return cached token if still valid
   if (cachedUserToken && Date.now() < userTokenExpiresAt - 60_000) return cachedUserToken;
 
   // Try refreshing with refresh token
-  if (currentRefreshToken) {
+  const refreshToken = await getRefreshToken();
+  if (refreshToken) {
     const res = await fetch(`${LARK_BASE_URL}/open-apis/authen/v1/oidc/refresh_access_token`, {
       method: 'POST',
       headers: {
@@ -42,7 +63,7 @@ export async function getUserToken(): Promise<string | null> {
       },
       body: JSON.stringify({
         grant_type: 'refresh_token',
-        refresh_token: currentRefreshToken,
+        refresh_token: refreshToken,
       }),
     });
     const data = await res.json() as {
@@ -57,7 +78,9 @@ export async function getUserToken(): Promise<string | null> {
     if (data.code === 0 && data.data?.access_token) {
       cachedUserToken = data.data.access_token;
       userTokenExpiresAt = Date.now() + (data.data.expire_in ?? 7200) * 1000;
-      currentRefreshToken = data.data.refresh_token ?? currentRefreshToken;
+      if (data.data.refresh_token) {
+        await saveRefreshToken(data.data.refresh_token);
+      }
       console.log('User token refreshed successfully');
       return cachedUserToken;
     }
@@ -70,7 +93,7 @@ export async function getUserToken(): Promise<string | null> {
   const envToken = process.env.LARK_USER_TOKEN;
   if (envToken) {
     cachedUserToken = envToken;
-    userTokenExpiresAt = Date.now() + 7200 * 1000; // assume 2h validity
+    userTokenExpiresAt = Date.now() + 7200 * 1000;
     return cachedUserToken;
   }
 
