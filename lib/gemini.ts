@@ -469,13 +469,10 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       }),
     );
 
-    // Add the assistant's function call and results to contents
-    // Only include functionCall parts — drop thought/text parts to avoid confusing the model
+    // Add the assistant's full response (including thought parts) to contents
     contents.push({
       role: 'model',
-      parts: parts
-        .filter(p => p.functionCall)
-        .map(p => ({ functionCall: p.functionCall }) as unknown as { text: string }),
+      parts: parts as unknown as Array<{ text: string }>,
     });
     contents.push({
       role: 'user',
