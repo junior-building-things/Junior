@@ -141,38 +141,81 @@ export async function getFeatureStatus(meegoUrl: string): Promise<string> {
     fields: ['wiki', 'priority', 'field_due3fb'],
   });
 
-  const name = parseWorkItemField(raw, '工作项名称') || 'Unknown';
-  const prd = parseWorkItemField(raw, 'PRD');
-  const priorityRaw = parseWorkItemField(raw, '优先级');
-  const compliance = parseWorkItemField(raw, '合规评估工单链接');
+  // Try JSON parsing first (current MCP format), fall back to markdown regex
+  try {
+    const data = JSON.parse(raw) as {
+      work_item_attribute?: {
+        work_item_name?: string;
+        work_item_status?: { name?: string };
+        role_members?: Array<{ name: string; members?: Array<{ name: string }> }>;
+        work_item_current_node?: Array<{ id: string; name: string }>;
+      };
+      work_item_fields?: Array<{ key: string; name: string; value: unknown }>;
+    };
 
-  const activeNodes = parseActiveNodes(raw);
-  const best = pickNode(activeNodes.map(n => ({ key: n.key, name: n.name })));
+    const attr = data.work_item_attribute;
+    const name = attr?.work_item_name ?? 'Unknown';
+    const status = attr?.work_item_status?.name ?? '';
 
-  const pm = parseRoleMember(raw, 'PM');
-  const tpm = parseRoleMember(raw, 'TPM');
-  const tech = parseRoleMember(raw, 'Tech owner');
-  const ios = parseRoleMember(raw, 'iOS');
-  const android = parseRoleMember(raw, 'Android');
-  const server = parseRoleMember(raw, 'Server');
-  const qa = parseRoleMember(raw, 'QA');
+    // Current nodes
+    const nodes = attr?.work_item_current_node ?? [];
+    const bestNode = pickNode(nodes.map(n => ({ key: n.id, name: n.name })));
+    const nodeDisplay = bestNode ? translateNode(bestNode.name) : (status || 'Unknown');
 
-  const lines = [
-    `**${name}**`,
-    `Status: ${best ? translateNode(best.name) : 'Unknown'}`,
-    priorityRaw ? `Priority: ${priorityRaw}` : '',
-    prd ? `PRD: ${prd}` : '',
-    compliance ? `Compliance: ${compliance}` : '',
-    pm ? `PM: ${pm}` : '',
-    tpm ? `TPM: ${tpm}` : '',
-    tech ? `Tech: ${tech}` : '',
-    ios ? `iOS: ${ios}` : '',
-    android ? `Android: ${android}` : '',
-    server ? `Server: ${server}` : '',
-    qa ? `QA: ${qa}` : '',
-  ].filter(Boolean);
+    // Fields
+    const fields = data.work_item_fields ?? [];
+    const getField = (key: string) => {
+      const f = fields.find(f => f.key === key);
+      if (!f) return '';
+      if (typeof f.value === 'string') return f.value;
+      if (f.value && typeof f.value === 'object' && 'label' in f.value) return (f.value as { label: string }).label;
+      return '';
+    };
+    const prd = getField('wiki');
+    const priority = getField('priority');
 
-  return lines.join('\n');
+    // Role members
+    const getRole = (roleName: string) => {
+      const role = (attr?.role_members ?? []).find(r => r.name === roleName);
+      return (role?.members ?? []).map(m => m.name).join(', ');
+    };
+
+    const lines = [
+      `**${name}**`,
+      `Status: ${nodeDisplay}`,
+      priority ? `Priority: ${priority}` : '',
+      prd ? `PRD: ${prd}` : '',
+      getRole('PM') ? `PM: ${getRole('PM')}` : '',
+      getRole('TPM') ? `TPM: ${getRole('TPM')}` : '',
+      getRole('Tech owner') ? `Tech: ${getRole('Tech owner')}` : '',
+      getRole('iOS') ? `iOS: ${getRole('iOS')}` : '',
+      getRole('Android') ? `Android: ${getRole('Android')}` : '',
+      getRole('Server') ? `Server: ${getRole('Server')}` : '',
+      getRole('QA') ? `QA: ${getRole('QA')}` : '',
+      `Meego: ${meegoUrl}`,
+    ].filter(Boolean);
+
+    return lines.join('\n');
+  } catch {
+    // Fall back to old markdown parsing
+    const name = parseWorkItemField(raw, '工作项名称') || 'Unknown';
+    const prd = parseWorkItemField(raw, 'PRD');
+    const priorityRaw = parseWorkItemField(raw, '优先级');
+
+    const activeNodes = parseActiveNodes(raw);
+    const best = pickNode(activeNodes.map(n => ({ key: n.key, name: n.name })));
+
+    const lines = [
+      `**${name}**`,
+      `Status: ${best ? translateNode(best.name) : 'Unknown'}`,
+      priorityRaw ? `Priority: ${priorityRaw}` : '',
+      prd ? `PRD: ${prd}` : '',
+      parseRoleMember(raw, 'PM') ? `PM: ${parseRoleMember(raw, 'PM')}` : '',
+      parseRoleMember(raw, 'Tech owner') ? `Tech: ${parseRoleMember(raw, 'Tech owner')}` : '',
+    ].filter(Boolean);
+
+    return lines.join('\n');
+  }
 }
 
 export async function searchFeature(query: string): Promise<string> {
