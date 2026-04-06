@@ -428,8 +428,21 @@ Behavior guidelines:
 // ─── Main chat function ──────────────────────────────────────────────────────
 
 export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
-  // Filter out corrupted history entries from previous failures
-  const cleanHistory = history.filter(m => m.content && m.content !== 'No response generated.');
+  // Filter out corrupted history pairs from previous failures
+  const ERROR_PATTERNS = ['No response generated.', "couldn't retrieve", "don't have the necessary permissions", 'encountered an error', 'showing as'];
+  const cleanHistory: ChatMessage[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (!m.content) continue;
+    if (m.role === 'model' && ERROR_PATTERNS.some(p => m.content.includes(p))) {
+      // Also remove the preceding user message
+      if (cleanHistory.length > 0 && cleanHistory[cleanHistory.length - 1].role === 'user') {
+        cleanHistory.pop();
+      }
+      continue;
+    }
+    cleanHistory.push(m);
+  }
   const chatHistory = cleanHistory.map(m => ({
     role: m.role,
     parts: [{ text: m.content }],
