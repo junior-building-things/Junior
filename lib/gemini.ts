@@ -457,7 +457,9 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       functionCalls.map(async (p) => {
         const fc = p.functionCall!;
         const name = fc.name ?? 'unknown';
+        console.log(`Tool call [${i}]: ${name}`, JSON.stringify(fc.args));
         const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
+        console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
         return { name, response: { result } };
       }),
     );
@@ -489,10 +491,18 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     });
   }
 
-  console.log('Final response:', JSON.stringify(response.candidates?.[0]?.content?.parts?.map(p => ({ text: p.text, fc: p.functionCall?.name }))));
-  // Fall back to manually extracting text from parts
+  // Debug: log full response structure
+  const rawParts = response.candidates?.[0]?.content?.parts ?? [];
+  console.log('Final response parts:', JSON.stringify(rawParts.map(p => Object.keys(p))));
+  console.log('Final response text:', response.text);
+  console.log('Finish reason:', response.candidates?.[0]?.finishReason);
+
   if (response.text) return response.text;
-  const finalParts = response.candidates?.[0]?.content?.parts ?? [];
-  const textContent = finalParts.map(p => p.text ?? '').join('').trim();
+  // Fallback: extract any text from parts (including thought parts)
+  const textContent = rawParts
+    .filter((p): p is { text: string } => typeof p.text === 'string')
+    .map(p => p.text)
+    .join('')
+    .trim();
   return textContent || 'No response generated.';
 }
