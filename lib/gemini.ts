@@ -428,15 +428,14 @@ Behavior guidelines:
 // ─── Main chat function ──────────────────────────────────────────────────────
 
 export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
-  const contents = history.map(m => ({
+  const chatHistory = history.map(m => ({
     role: m.role,
     parts: [{ text: m.content }],
   }));
-  contents.push({ role: 'user', parts: [{ text: userMessage }] });
 
-  let response = await ai.models.generateContent({
+  const chatSession = ai.chats.create({
     model: MODEL,
-    contents,
+    history: chatHistory,
     config: {
       systemInstruction: SYSTEM_PROMPT,
       tools: [{ functionDeclarations: tools }],
@@ -444,70 +443,35 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     },
   });
 
+  let response = await chatSession.sendMessage({ message: userMessage });
+
   // Handle multi-turn function calling (up to 5 rounds)
   for (let i = 0; i < 5; i++) {
-    const candidate = response.candidates?.[0];
-    const parts = candidate?.content?.parts ?? [];
-
+    const parts = response.candidates?.[0]?.content?.parts ?? [];
     const functionCalls = parts.filter(p => p.functionCall);
     if (functionCalls.length === 0) break;
 
     // Execute all function calls
-    const functionResponses = await Promise.all(
-      functionCalls.map(async (p) => {
-        const fc = p.functionCall!;
-        const name = fc.name ?? 'unknown';
-        console.log(`Tool call [${i}]:`, JSON.stringify(fc));
-        const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
-        console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
-        // Gemini expects response to be an object, not a string
-        let output: unknown;
-        try { output = JSON.parse(result); } catch { output = { text: result }; }
-        const fr: Record<string, unknown> = { name, response: { output } };
-        if (fc.id) fr.id = fc.id;
-        return fr;
-      }),
-    );
+    const functionResponses = [];
+    for (const p of functionCalls) {
+      const fc = p.functionCall!;
+      const name = fc.name ?? 'unknown';
+      console.log(`Tool call [${i}]: ${name}`, JSON.stringify(fc.args));
+      const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
+      console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
+      let output: Record<string, unknown>;
+      try { output = JSON.parse(result) as Record<string, unknown>; } catch { output = { text: result }; }
+      functionResponses.push({ id: fc.id ?? '', name, response: output });
+    }
 
-    // Add the assistant's full response (including thought parts) to contents
-    contents.push({
-      role: 'model',
-      parts: parts as unknown as Array<{ text: string }>,
-    });
-    contents.push({
-      role: 'user',
-      parts: functionResponses.map(fr => ({
+    // Send function responses back via the chat session
+    response = await chatSession.sendMessage({
+      message: functionResponses.map(fr => ({
         functionResponse: fr,
-      })) as unknown as Array<{ text: string }>,
-    });
-
-    // Log what we're sending back
-    console.log(`Contents [${i}]:`, JSON.stringify(contents.slice(-2)));
-
-    // Get next response
-    response = await ai.models.generateContent({
-      model: MODEL,
-      contents,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        tools: [{ functionDeclarations: tools }],
-        toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
-      },
+      })),
     });
   }
 
-  // Debug: log full response structure
-  const rawParts = response.candidates?.[0]?.content?.parts ?? [];
-  console.log('Final response parts:', JSON.stringify(rawParts.map(p => Object.keys(p))));
   console.log('Final response text:', response.text);
-  console.log('Finish reason:', response.candidates?.[0]?.finishReason);
-
-  if (response.text) return response.text;
-  // Fallback: extract any text from parts (including thought parts)
-  const textContent = rawParts
-    .filter((p): p is { text: string } => typeof p.text === 'string')
-    .map(p => p.text)
-    .join('')
-    .trim();
-  return textContent || 'No response generated.';
+  return response.text ?? 'No response generated.';
 }
