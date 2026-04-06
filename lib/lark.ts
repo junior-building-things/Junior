@@ -724,7 +724,6 @@ export async function listUserChats(userToken: string): Promise<Array<{ chat_id:
       code: number;
       data?: { items?: Array<{ chat_id: string; name: string; chat_mode?: string; [key: string]: unknown }>; page_token?: string; has_more?: boolean };
     };
-    console.log(`listUserChats page ${page}: code=${data.code}, items=${data.data?.items?.length ?? 0}`, data.code !== 0 ? JSON.stringify(data).slice(0, 300) : '');
     if (data.code !== 0) break;
     chats.push(...(data.data?.items ?? []));
     if (!data.data?.has_more) break;
@@ -760,16 +759,7 @@ export async function listChatMessages(
         has_more?: boolean;
       };
     };
-    if (data.code !== 0) {
-      console.error(`listChatMessages error for ${chatId}: ${data.code}`, JSON.stringify(data).slice(0, 200));
-      break;
-    }
-
-    // Log first message structure once for debugging
-    if (page === 0 && (data.data?.items?.length ?? 0) > 0) {
-      const sample = data.data!.items![0];
-      console.log('Sample message sender:', JSON.stringify(sample.sender));
-    }
+    if (data.code !== 0) break;
 
     for (const msg of data.data?.items ?? []) {
       let content = '';
@@ -805,12 +795,9 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
   const botOpenId = process.env.LARK_BOT_OPEN_ID ?? '';
 
   const chats = await listUserChats(userToken);
-  console.log(`Found ${chats.length} chats, modes:`, chats.slice(0, 5).map(c => `${c.name}(${c.chat_mode})`));
   if (chats.length === 0) return 'No chats found.';
 
   const results: Array<{ name: string; lines: string[] }> = [];
-  let totalMessages = 0;
-  let emptyChats = 0;
 
   // Fetch in batches of 5
   for (let i = 0; i < chats.length; i += 5) {
@@ -828,15 +815,10 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
     );
 
     for (const { chat, messages } of batchResults) {
-      totalMessages += messages.length;
-      if (messages.length === 0) { emptyChats++; continue; }
+      if (messages.length === 0) continue;
 
       // Only include chats where the user sent a message
-      const senderIds = [...new Set(messages.map(m => m.sender_id))];
-      if (!messages.some(m => m.sender_id === userOpenId)) {
-        if (messages.length > 0) console.log(`Skipped ${chat.name}: senders=${JSON.stringify(senderIds.slice(0, 3))}, looking for=${userOpenId}`);
-        continue;
-      }
+      if (!messages.some(m => m.sender_id === userOpenId)) continue;
 
       const lines = messages
         .filter(m => m.sender_id !== botOpenId)
@@ -852,7 +834,6 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
     }
   }
 
-  console.log(`Stats: ${chats.length} chats, ${emptyChats} empty, ${totalMessages} total messages, ${results.length} matched`);
   if (results.length === 0) return `No conversations found in the last ${days} day(s).`;
 
   // Truncate if total messages exceed 2000
