@@ -815,13 +815,14 @@ export async function fetchRecentConversations(userToken: string, userOpenId: st
       totalMessages += messages.length;
       if (messages.length === 0) { emptyChats++; continue; }
 
-      // Filter: P2P → include all; Group → only if user sent or was mentioned
-      if (chat.chat_mode !== 'p2p') {
-        const userInvolved = messages.some(
-          m => m.sender_id === userOpenId || m.mentions.includes(userOpenId),
-        );
-        if (!userInvolved) continue;
-      }
+      // Include if user sent a message, was mentioned, or it's a small chat (likely DM)
+      const userInvolved = messages.some(
+        m => m.sender_id === userOpenId || m.mentions.includes(userOpenId),
+      );
+      // Get unique senders — 2 or fewer likely means DM
+      const uniqueSenders = new Set(messages.map(m => m.sender_id));
+      const likelyDm = uniqueSenders.size <= 2;
+      if (!userInvolved && !likelyDm) continue;
 
       const lines = messages
         .filter(m => m.sender_id !== botOpenId)
