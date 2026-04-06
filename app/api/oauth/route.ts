@@ -18,7 +18,8 @@ export async function GET(req: Request) {
 
   // No code — redirect to Lark OAuth
   if (!code) {
-    const redirectUri = `${url.origin}/api/oauth`;
+    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host;
+    const redirectUri = `https://${host}/api/oauth`;
     const authUrl = `${LARK_BASE_URL}/open-apis/authen/v1/authorize?app_id=${LARK_APP_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&state=auth`;
     return Response.redirect(authUrl);
   }
