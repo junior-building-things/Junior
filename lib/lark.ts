@@ -717,8 +717,8 @@ export async function listUserChats(userToken: string): Promise<Array<{ chat_id:
   const chats: Array<{ chat_id: string; name: string; chat_mode?: string; [key: string]: unknown }> = [];
   let pageToken = '';
 
-  for (let page = 0; page < 2; page++) {
-    const url = `${LARK_BASE_URL}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id${pageToken ? `&page_token=${pageToken}` : ''}`;
+  for (let page = 0; page < 5; page++) {
+    const url = `${LARK_BASE_URL}/open-apis/im/v1/chats?page_size=100&user_id_type=open_id&sort_type=ByActiveTimeDesc${pageToken ? `&page_token=${pageToken}` : ''}`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${userToken}` } });
     const data = await res.json() as {
       code: number;
