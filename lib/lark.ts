@@ -744,17 +744,17 @@ export async function listChatMessages(
   let pageToken = '';
 
   for (let page = 0; page < 4; page++) {
-    const url = `${LARK_BASE_URL}/open-apis/im/v1/messages?container_id_type=chat&container_id=${chatId}&start_time=${startTime}&end_time=${endTime}&page_size=50&sort_type=ByCreateTimeAsc${pageToken ? `&page_token=${pageToken}` : ''}`;
+    const url = `${LARK_BASE_URL}/open-apis/im/v1/messages?container_id_type=chat&container_id=${chatId}&start_time=${startTime}&end_time=${endTime}&page_size=50&sort_type=ByCreateTimeAsc&user_id_type=open_id${pageToken ? `&page_token=${pageToken}` : ''}`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${userToken}` } });
     const data = await res.json() as {
       code: number;
       data?: {
         items?: Array<{
-          sender: { sender_id: string };
+          sender: { sender_id?: string; id?: string; sender_id_type?: string };
           body?: { content?: string };
           msg_type: string;
           create_time: string;
-          mentions?: Array<{ id: { open_id?: string } }>;
+          mentions?: Array<{ id?: { open_id?: string }; open_id?: string }>;
         }>;
         page_token?: string;
         has_more?: boolean;
@@ -763,6 +763,12 @@ export async function listChatMessages(
     if (data.code !== 0) {
       console.error(`listChatMessages error for ${chatId}: ${data.code}`, JSON.stringify(data).slice(0, 200));
       break;
+    }
+
+    // Log first message structure once for debugging
+    if (page === 0 && (data.data?.items?.length ?? 0) > 0) {
+      const sample = data.data!.items![0];
+      console.log('Sample message sender:', JSON.stringify(sample.sender));
     }
 
     for (const msg of data.data?.items ?? []) {
@@ -782,7 +788,8 @@ export async function listChatMessages(
       }
 
       const mentions = (msg.mentions ?? []).map(m => m.id?.open_id ?? '').filter(Boolean);
-      messages.push({ sender_id: msg.sender.sender_id, content, create_time: msg.create_time, mentions });
+      const senderId = msg.sender.sender_id ?? msg.sender.id ?? '';
+      messages.push({ sender_id: senderId, content, create_time: msg.create_time, mentions });
     }
 
     if (!data.data?.has_more) break;
