@@ -428,7 +428,9 @@ Behavior guidelines:
 // ─── Main chat function ──────────────────────────────────────────────────────
 
 export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
-  const chatHistory = history.map(m => ({
+  // Filter out corrupted history entries from previous failures
+  const cleanHistory = history.filter(m => m.content && m.content !== 'No response generated.');
+  const chatHistory = cleanHistory.map(m => ({
     role: m.role,
     parts: [{ text: m.content }],
   }));

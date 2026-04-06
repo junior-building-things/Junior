@@ -75,10 +75,12 @@ export async function POST(req: Request) {
     reply = "Sorry, I hit an error processing that. Try again?";
   }
 
-  // Save messages
-  history.push({ role: 'user', content: userText });
-  history.push({ role: 'model', content: reply });
-  await saveMessages(chatId, history);
+  // Save messages (skip failed responses to avoid polluting history)
+  if (reply && reply !== 'No response generated.') {
+    history.push({ role: 'user', content: userText });
+    history.push({ role: 'model', content: reply });
+    await saveMessages(chatId, history);
+  }
 
   // Send reply
   try {
