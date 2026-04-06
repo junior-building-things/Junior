@@ -53,11 +53,19 @@ export async function GET(req: Request) {
 
   const d = data.data!;
 
-  // Persist refresh token to KV so it survives instance restarts
-  if (d.refresh_token && process.env.KV_REST_API_URL) {
+  // Persist refresh token to Secret Manager so it survives instance restarts
+  if (d.refresh_token) {
     try {
-      const { kv } = await import('@vercel/kv');
-      await kv.set('lark:refresh_token', d.refresh_token);
+      const project = process.env.GCP_PROJECT ?? 'tiktok-im';
+      const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+        headers: { 'Metadata-Flavor': 'Google' },
+      });
+      const { access_token } = await tokenRes.json() as { access_token: string };
+      await fetch(`https://secretmanager.googleapis.com/v1/projects/${project}/secrets/lark-refresh-token:addVersion`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload: { data: Buffer.from(d.refresh_token).toString('base64') } }),
+      });
     } catch { /* best effort */ }
   }
 

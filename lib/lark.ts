@@ -27,13 +27,21 @@ export async function getTenantToken(): Promise<string> {
 let cachedUserToken = '';
 let userTokenExpiresAt = 0;
 
-// Load/save refresh token from KV so it survives instance restarts
+// Load/save refresh token from GCP Secret Manager so it survives instance restarts
+const GCP_PROJECT = process.env.GCP_PROJECT ?? 'tiktok-im';
+const SECRET_NAME = 'lark-refresh-token';
+
 async function getRefreshToken(): Promise<string> {
   try {
-    if (process.env.KV_REST_API_URL) {
-      const mod = await import('@vercel/kv');
-      const stored = await mod.kv.get('lark:refresh_token') as string | null;
-      if (stored) return stored;
+    const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}/versions/latest:access`;
+    const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+      headers: { 'Metadata-Flavor': 'Google' },
+    });
+    const { access_token } = await tokenRes.json() as { access_token: string };
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${access_token}` } });
+    const data = await res.json() as { payload?: { data?: string } };
+    if (data.payload?.data) {
+      return Buffer.from(data.payload.data, 'base64').toString('utf-8');
     }
   } catch { /* fall through */ }
   return process.env.LARK_REFRESH_TOKEN ?? '';
@@ -41,11 +49,19 @@ async function getRefreshToken(): Promise<string> {
 
 async function saveRefreshToken(token: string): Promise<void> {
   try {
-    if (process.env.KV_REST_API_URL) {
-      const mod = await import('@vercel/kv');
-      await mod.kv.set('lark:refresh_token', token);
-    }
-  } catch { /* best effort */ }
+    const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}:addVersion`;
+    const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+      headers: { 'Metadata-Flavor': 'Google' },
+    });
+    const { access_token } = await tokenRes.json() as { access_token: string };
+    await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: { data: Buffer.from(token).toString('base64') } }),
+    });
+  } catch (e) {
+    console.error('Failed to save refresh token:', e);
+  }
 }
 
 export async function getUserToken(): Promise<string | null> {
