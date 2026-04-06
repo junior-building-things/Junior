@@ -195,17 +195,6 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
-    name: 'get_stock_price',
-    description: 'Get the current stock price and market cap for a given ticker symbol.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        ticker: { type: Type.STRING, description: 'Stock ticker symbol (e.g. AAPL, TSLA, NVDA)' },
-      },
-      required: ['ticker'],
-    },
-  },
-  {
     name: 'whoami',
     description: 'Get the current user\'s Lark identity info (open_id, name). Use when the user asks "who am I", "what\'s my open id", or similar.',
     parameters: { type: Type.OBJECT, properties: {} },
@@ -331,8 +320,6 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
           { name: args.name as string | undefined, prd: args.prd as string | undefined, priority: args.priority as string | undefined },
         );
 
-      case 'get_stock_price':
-        return await getStockPrice(args.ticker as string);
 
       case 'whoami':
         return JSON.stringify({ open_id: ctx.senderOpenId ?? 'unknown', name: ctx.senderName ?? 'unknown' });
@@ -411,7 +398,6 @@ You have access to tools for:
 - **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes, update feature fields (name, PRD, priority)
 - **Documents (Lark)**: Read, edit sections, rename sections, add sections, add/list/reply to comments, duplicate documents, create PRD from template
 - **Package builds**: Get the latest package download URL (APK/IPA) for a feature from its Lark group chat
-- **Finance**: Get stock prices and market data
 - **Conversations**: Summarize all Lark conversations from the last 1, 2, or 7 days, grouped by topic with automation suggestions
 
 Behavior guidelines:
