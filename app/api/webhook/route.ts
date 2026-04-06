@@ -64,6 +64,16 @@ export async function POST(req: Request) {
     reactToMessage(messageId, 'OnIt').catch(() => {});
   }
 
+  // Handle reset command
+  if (userText.trim().toLowerCase() === 'reset') {
+    await saveMessages(chatId, []);
+    try {
+      if (messageId) await sendReply(messageId, 'Chat history cleared.', senderOpenId, senderName);
+      else await sendMessage(chatId, 'Chat history cleared.');
+    } catch {}
+    return new Response('', { status: 200 });
+  }
+
   // Load chat history and generate response
   const history = await loadMessages(chatId);
 
