@@ -19,7 +19,7 @@ const tools: FunctionDeclaration[] = [
   },
   {
     name: 'get_feature_status',
-    description: 'Get detailed status of a specific feature by its Meego URL, including team members, priority, PRD link, and current workflow node.',
+    description: 'Get all available information about a feature by its Meego URL — status, priority, PRD, target version, team members, workflow nodes, custom fields, dates, and more. Use for any question about a Meego feature.',
     parameters: {
       type: Type.OBJECT,
       properties: {

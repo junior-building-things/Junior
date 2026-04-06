@@ -136,86 +136,9 @@ export async function getMyFeatures(): Promise<string> {
 }
 
 export async function getFeatureStatus(meegoUrl: string): Promise<string> {
-  const raw = await callMeegoMcp('get_workitem_brief', {
-    url: meegoUrl,
-    fields: ['wiki', 'priority', 'field_due3fb'],
-  });
-
-  // Try JSON parsing first (current MCP format), fall back to markdown regex
-  try {
-    const data = JSON.parse(raw) as {
-      work_item_attribute?: {
-        work_item_name?: string;
-        work_item_status?: { name?: string };
-        role_members?: Array<{ name: string; members?: Array<{ name: string }> }>;
-        work_item_current_node?: Array<{ id: string; name: string }>;
-      };
-      work_item_fields?: Array<{ key: string; name: string; value: unknown }>;
-    };
-
-    const attr = data.work_item_attribute;
-    const name = attr?.work_item_name ?? 'Unknown';
-    const status = attr?.work_item_status?.name ?? '';
-
-    // Current nodes
-    const nodes = attr?.work_item_current_node ?? [];
-    const bestNode = pickNode(nodes.map(n => ({ key: n.id, name: n.name })));
-    const nodeDisplay = bestNode ? translateNode(bestNode.name) : (status || 'Unknown');
-
-    // Fields
-    const fields = data.work_item_fields ?? [];
-    const getField = (key: string) => {
-      const f = fields.find(f => f.key === key);
-      if (!f) return '';
-      if (typeof f.value === 'string') return f.value;
-      if (f.value && typeof f.value === 'object' && 'label' in f.value) return (f.value as { label: string }).label;
-      return '';
-    };
-    const prd = getField('wiki');
-    const priority = getField('priority');
-
-    // Role members
-    const getRole = (roleName: string) => {
-      const role = (attr?.role_members ?? []).find(r => r.name === roleName);
-      return (role?.members ?? []).map(m => m.name).join(', ');
-    };
-
-    const lines = [
-      `**${name}**`,
-      `Status: ${nodeDisplay}`,
-      priority ? `Priority: ${priority}` : '',
-      prd ? `PRD: ${prd}` : '',
-      getRole('PM') ? `PM: ${getRole('PM')}` : '',
-      getRole('TPM') ? `TPM: ${getRole('TPM')}` : '',
-      getRole('Tech owner') ? `Tech: ${getRole('Tech owner')}` : '',
-      getRole('iOS') ? `iOS: ${getRole('iOS')}` : '',
-      getRole('Android') ? `Android: ${getRole('Android')}` : '',
-      getRole('Server') ? `Server: ${getRole('Server')}` : '',
-      getRole('QA') ? `QA: ${getRole('QA')}` : '',
-      `Meego: ${meegoUrl}`,
-    ].filter(Boolean);
-
-    return lines.join('\n');
-  } catch {
-    // Fall back to old markdown parsing
-    const name = parseWorkItemField(raw, '工作项名称') || 'Unknown';
-    const prd = parseWorkItemField(raw, 'PRD');
-    const priorityRaw = parseWorkItemField(raw, '优先级');
-
-    const activeNodes = parseActiveNodes(raw);
-    const best = pickNode(activeNodes.map(n => ({ key: n.key, name: n.name })));
-
-    const lines = [
-      `**${name}**`,
-      `Status: ${best ? translateNode(best.name) : 'Unknown'}`,
-      priorityRaw ? `Priority: ${priorityRaw}` : '',
-      prd ? `PRD: ${prd}` : '',
-      parseRoleMember(raw, 'PM') ? `PM: ${parseRoleMember(raw, 'PM')}` : '',
-      parseRoleMember(raw, 'Tech owner') ? `Tech: ${parseRoleMember(raw, 'Tech owner')}` : '',
-    ].filter(Boolean);
-
-    return lines.join('\n');
-  }
+  const raw = await callMeegoMcp('get_workitem_brief', { url: meegoUrl });
+  // Return full MCP response — let Gemini extract whatever the user asked about
+  return raw;
 }
 
 export async function searchFeature(query: string): Promise<string> {
