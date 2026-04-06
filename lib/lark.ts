@@ -660,6 +660,7 @@ export async function listUserChats(userToken: string): Promise<Array<{ chat_id:
       code: number;
       data?: { items?: Array<{ chat_id: string; name: string; chat_type: string }>; page_token?: string; has_more?: boolean };
     };
+    console.log(`listUserChats page ${page}: code=${data.code}, items=${data.data?.items?.length ?? 0}`, data.code !== 0 ? JSON.stringify(data).slice(0, 300) : '');
     if (data.code !== 0) break;
     chats.push(...(data.data?.items ?? []));
     if (!data.data?.has_more) break;
