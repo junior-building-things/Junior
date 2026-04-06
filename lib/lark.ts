@@ -61,7 +61,9 @@ export async function getUserToken(): Promise<string | null> {
       console.log('User token refreshed successfully');
       return cachedUserToken;
     }
-    console.error('User token refresh failed:', data.code);
+    console.error('User token refresh failed:', JSON.stringify(data).slice(0, 300));
+  } else {
+    console.log('No refresh token available');
   }
 
   // Fall back to env var (initial token)
