@@ -456,9 +456,7 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     for (const p of functionCalls) {
       const fc = p.functionCall!;
       const name = fc.name ?? 'unknown';
-      console.log(`Tool call [${i}]: ${name}`, JSON.stringify(fc.args));
       const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
-      console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
       let output: Record<string, unknown>;
       try { output = JSON.parse(result) as Record<string, unknown>; } catch { output = { text: result }; }
       functionResponses.push({ id: fc.id ?? '', name, response: output });
@@ -472,6 +470,5 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     });
   }
 
-  console.log('Final response text:', response.text);
   return response.text ?? 'No response generated.';
 }
