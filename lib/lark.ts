@@ -27,49 +27,71 @@ export async function getTenantToken(): Promise<string> {
 let cachedUserToken = '';
 let userTokenExpiresAt = 0;
 
-// Load/save refresh token from GCP Secret Manager so it survives instance restarts
+// ─── Secret Manager helpers ─────────────────────────────────────────────────
+// Store both access_token + refresh_token as JSON so new instances can resume
+// without needing to refresh (which consumes the single-use refresh token).
+
 const GCP_PROJECT = process.env.GCP_PROJECT ?? 'tiktok-im';
 const SECRET_NAME = 'lark-refresh-token';
 
-async function getRefreshToken(): Promise<string> {
-  try {
-    const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}/versions/latest:access`;
-    const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
-      headers: { 'Metadata-Flavor': 'Google' },
-    });
-    const { access_token } = await tokenRes.json() as { access_token: string };
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${access_token}` } });
-    const data = await res.json() as { payload?: { data?: string } };
-    if (data.payload?.data) {
-      return Buffer.from(data.payload.data, 'base64').toString('utf-8');
-    }
-  } catch { /* fall through */ }
-  return process.env.LARK_REFRESH_TOKEN ?? '';
+interface LarkTokens {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // unix ms
 }
 
-async function saveRefreshToken(token: string): Promise<void> {
+async function getGcpAccessToken(): Promise<string> {
+  const res = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
+    headers: { 'Metadata-Flavor': 'Google' },
+  });
+  const data = await res.json() as { access_token: string };
+  return data.access_token;
+}
+
+async function loadTokensFromSecret(): Promise<LarkTokens | null> {
   try {
+    const gcpToken = await getGcpAccessToken();
+    const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}/versions/latest:access`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${gcpToken}` } });
+    const data = await res.json() as { payload?: { data?: string } };
+    if (data.payload?.data) {
+      return JSON.parse(Buffer.from(data.payload.data, 'base64').toString('utf-8')) as LarkTokens;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+export async function saveTokensToSecret(tokens: LarkTokens): Promise<void> {
+  try {
+    const gcpToken = await getGcpAccessToken();
     const url = `https://secretmanager.googleapis.com/v1/projects/${GCP_PROJECT}/secrets/${SECRET_NAME}:addVersion`;
-    const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
-      headers: { 'Metadata-Flavor': 'Google' },
-    });
-    const { access_token } = await tokenRes.json() as { access_token: string };
     await fetch(url, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payload: { data: Buffer.from(token).toString('base64') } }),
+      headers: { Authorization: `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ payload: { data: Buffer.from(JSON.stringify(tokens)).toString('base64') } }),
     });
   } catch (e) {
-    console.error('Failed to save refresh token:', e);
+    console.error('Failed to save tokens:', e);
   }
 }
 
 export async function getUserToken(): Promise<string | null> {
-  // Return cached token if still valid
+  // Return in-memory cached token if still valid
   if (cachedUserToken && Date.now() < userTokenExpiresAt - 60_000) return cachedUserToken;
 
-  // Try refreshing with refresh token
-  const refreshToken = await getRefreshToken();
+  // Load from Secret Manager (has both access + refresh token)
+  const stored = await loadTokensFromSecret();
+
+  // If stored access token is still valid, use it directly (no refresh needed)
+  if (stored && Date.now() < stored.expires_at - 60_000) {
+    cachedUserToken = stored.access_token;
+    userTokenExpiresAt = stored.expires_at;
+    console.log('User token loaded from secret (still valid)');
+    return cachedUserToken;
+  }
+
+  // Access token expired — refresh it
+  const refreshToken = stored?.refresh_token ?? process.env.LARK_REFRESH_TOKEN ?? '';
   if (refreshToken) {
     const res = await fetch(`${LARK_BASE_URL}/open-apis/authen/v1/oidc/refresh_access_token`, {
       method: 'POST',
@@ -88,29 +110,21 @@ export async function getUserToken(): Promise<string | null> {
         access_token?: string;
         refresh_token?: string;
         expire_in?: number;
-        refresh_expires_in?: number;
       };
     };
     if (data.code === 0 && data.data?.access_token) {
       cachedUserToken = data.data.access_token;
       userTokenExpiresAt = Date.now() + (data.data.expire_in ?? 7200) * 1000;
-      if (data.data.refresh_token) {
-        await saveRefreshToken(data.data.refresh_token);
-      }
-      console.log('User token refreshed successfully');
+      // Save both tokens so next instance can use access token directly
+      await saveTokensToSecret({
+        access_token: cachedUserToken,
+        refresh_token: data.data.refresh_token ?? refreshToken,
+        expires_at: userTokenExpiresAt,
+      });
+      console.log('User token refreshed and saved to secret');
       return cachedUserToken;
     }
     console.error('User token refresh failed:', JSON.stringify(data).slice(0, 300));
-  } else {
-    console.log('No refresh token available');
-  }
-
-  // Fall back to env var (initial token)
-  const envToken = process.env.LARK_USER_TOKEN;
-  if (envToken) {
-    cachedUserToken = envToken;
-    userTokenExpiresAt = Date.now() + 7200 * 1000;
-    return cachedUserToken;
   }
 
   return null;

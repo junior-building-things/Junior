@@ -53,20 +53,14 @@ export async function GET(req: Request) {
 
   const d = data.data!;
 
-  // Persist refresh token to Secret Manager so it survives instance restarts
-  if (d.refresh_token) {
-    try {
-      const project = process.env.GCP_PROJECT ?? 'tiktok-im';
-      const tokenRes = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
-        headers: { 'Metadata-Flavor': 'Google' },
-      });
-      const { access_token } = await tokenRes.json() as { access_token: string };
-      await fetch(`https://secretmanager.googleapis.com/v1/projects/${project}/secrets/lark-refresh-token:addVersion`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ payload: { data: Buffer.from(d.refresh_token).toString('base64') } }),
-      });
-    } catch { /* best effort */ }
+  // Persist both tokens to Secret Manager so they survive instance restarts
+  if (d.access_token && d.refresh_token) {
+    const { saveTokensToSecret } = await import('@/lib/lark');
+    await saveTokensToSecret({
+      access_token: d.access_token,
+      refresh_token: d.refresh_token,
+      expires_at: Date.now() + (d.expire_in ?? 7200) * 1000,
+    });
   }
 
   const body = [
