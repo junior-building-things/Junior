@@ -1,4 +1,4 @@
-import { createHmac } from 'crypto';
+import { createHash } from 'crypto';
 
 const LARK_VERIFICATION_TOKEN = process.env.LARK_VERIFICATION_TOKEN ?? '';
 const LARK_ENCRYPT_KEY = process.env.LARK_ENCRYPT_KEY ?? '';
@@ -12,7 +12,8 @@ function verifySignature(req: Request, body: string): boolean {
   const signature = req.headers.get('X-Lark-Signature') ?? '';
   if (!timestamp || !nonce || !signature) return false;
 
-  const expected = createHmac('sha256', LARK_ENCRYPT_KEY)
+  // Lark uses plain SHA-256: sha256(timestamp + nonce + encrypt_key + body)
+  const expected = createHash('sha256')
     .update(timestamp + nonce + LARK_ENCRYPT_KEY + body)
     .digest('hex');
   return expected === signature;
