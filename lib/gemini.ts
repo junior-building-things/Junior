@@ -425,6 +425,7 @@ Behavior guidelines:
 - You can handle both English and Chinese messages. Always reply in English.
 - When Meego data contains Chinese (e.g. status "已上车", node names, field labels), always translate to English in your reply.
 - Don't apologize excessively. Just do the thing.
+- When asked "what can you do" or "help", describe YOUR specific capabilities (Meego features, Lark docs, package builds, stock prices, conversation summaries). Never give a generic AI capabilities list.
 - When the user asks to summarize conversations, messages, or chats from recent days/today/this week, use the summarize_conversations tool.`;
 
 // ─── Main chat function ──────────────────────────────────────────────────────
