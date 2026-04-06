@@ -37,6 +37,18 @@ export async function POST(req: Request) {
     return new Response('Invalid signature', { status: 403 });
   }
 
+  // Debug: log top-level keys to diagnose silent drops
+  const topKeys = Object.keys(data);
+  const hasEncrypt = 'encrypt' in data;
+  const senderType = data.event?.sender?.sender_type;
+  console.log(`[webhook] keys=${topKeys.join(',')} encrypt=${hasEncrypt} sender_type=${senderType}`);
+
+  // If the body is encrypted, we can't process it — log and bail
+  if (hasEncrypt && !data.header) {
+    console.error('[webhook] Received encrypted payload — decryption not implemented. Set Encrypt Key to empty in Lark console or implement decryption.');
+    return new Response('', { status: 200 });
+  }
+
   // Lazy-load heavy modules only for actual messages
   const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMessages, saveMessages, recordEventOnce }, { chat }] = await Promise.all([
     import('@/lib/lark'),
