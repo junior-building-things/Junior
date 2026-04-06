@@ -338,9 +338,9 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         return JSON.stringify({ open_id: ctx.senderOpenId ?? 'unknown', name: ctx.senderName ?? 'unknown' });
 
       case 'summarize_conversations': {
-        const userToken = process.env.MEEGO_USER_TOKEN;
+        const userToken = await lark.getUserToken();
         const userOpenId = process.env.LARK_USER_OPEN_ID;
-        if (!userToken) return 'User token not configured (MEEGO_USER_TOKEN).';
+        if (!userToken) return 'Lark user token not configured. Set LARK_USER_TOKEN and LARK_REFRESH_TOKEN.';
         if (!userOpenId) return 'User open ID not configured (LARK_USER_OPEN_ID).';
 
         const days = Math.min(Math.max(Math.round(Number(args.days) || 1), 1), 7);

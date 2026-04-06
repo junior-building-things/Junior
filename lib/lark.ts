@@ -22,6 +22,59 @@ export async function getTenantToken(): Promise<string> {
   return cachedToken;
 }
 
+// ─── User token (for reading user's chats) ──────────────────────────────────
+
+let cachedUserToken = '';
+let userTokenExpiresAt = 0;
+let currentRefreshToken = process.env.LARK_REFRESH_TOKEN ?? '';
+
+export async function getUserToken(): Promise<string | null> {
+  // Return cached token if still valid
+  if (cachedUserToken && Date.now() < userTokenExpiresAt - 60_000) return cachedUserToken;
+
+  // Try refreshing with refresh token
+  if (currentRefreshToken) {
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/authen/v1/oidc/refresh_access_token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await getTenantToken()}`,
+      },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: currentRefreshToken,
+      }),
+    });
+    const data = await res.json() as {
+      code: number;
+      data?: {
+        access_token?: string;
+        refresh_token?: string;
+        expire_in?: number;
+        refresh_expires_in?: number;
+      };
+    };
+    if (data.code === 0 && data.data?.access_token) {
+      cachedUserToken = data.data.access_token;
+      userTokenExpiresAt = Date.now() + (data.data.expire_in ?? 7200) * 1000;
+      currentRefreshToken = data.data.refresh_token ?? currentRefreshToken;
+      console.log('User token refreshed successfully');
+      return cachedUserToken;
+    }
+    console.error('User token refresh failed:', data.code);
+  }
+
+  // Fall back to env var (initial token)
+  const envToken = process.env.LARK_USER_TOKEN;
+  if (envToken) {
+    cachedUserToken = envToken;
+    userTokenExpiresAt = Date.now() + 7200 * 1000; // assume 2h validity
+    return cachedUserToken;
+  }
+
+  return null;
+}
+
 // ─── Message sending ─────────────────────────────────────────────────────────
 
 export async function sendMessage(chatId: string, text: string): Promise<void> {
