@@ -460,7 +460,10 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         console.log(`Tool call [${i}]: ${name}`, JSON.stringify(fc.args));
         const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
         console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
-        return { name, response: { output: result } };
+        // Gemini expects response to be an object, not a string
+        let output: unknown;
+        try { output = JSON.parse(result); } catch { output = { text: result }; }
+        return { name, response: { output } };
       }),
     );
 
