@@ -460,17 +460,17 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         console.log(`Tool call [${i}]: ${name}`, JSON.stringify(fc.args));
         const result = await executeTool(name, (fc.args ?? {}) as Record<string, unknown>, ctx);
         console.log(`Tool result [${i}]: ${name}:`, result.slice(0, 200));
-        return { name, response: { result } };
+        return { name, response: { output: result } };
       }),
     );
 
     // Add the assistant's function call and results to contents
+    // Only include functionCall parts — drop thought/text parts to avoid confusing the model
     contents.push({
       role: 'model',
-      parts: parts.map(p => {
-        if (p.functionCall) return { functionCall: p.functionCall } as unknown as { text: string };
-        return { text: p.text ?? '' };
-      }),
+      parts: parts
+        .filter(p => p.functionCall)
+        .map(p => ({ functionCall: p.functionCall }) as unknown as { text: string }),
     });
     contents.push({
       role: 'user',
