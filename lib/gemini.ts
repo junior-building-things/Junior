@@ -467,10 +467,7 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       },
     });
 
-    let response = await chatSession.sendMessage({
-      message: userMessage,
-      config: { abortSignal: abort },
-    });
+    let response = await chatSession.sendMessage({ message: userMessage });
 
     // Handle multi-turn function calling (up to 5 rounds)
     for (let i = 0; i < 5; i++) {
@@ -496,7 +493,6 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         message: functionResponses.map(fr => ({
           functionResponse: fr,
         })),
-        config: { abortSignal: abort },
       });
     }
 
