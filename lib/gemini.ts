@@ -335,7 +335,7 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         return await getStockPrice(args.ticker as string);
 
       case 'whoami':
-        return `Open ID: ${ctx.senderOpenId ?? 'unknown'}\nName: ${ctx.senderName ?? 'unknown'}`;
+        return JSON.stringify({ open_id: ctx.senderOpenId ?? 'unknown', name: ctx.senderName ?? 'unknown' });
 
       case 'summarize_conversations': {
         const userToken = process.env.MEEGO_USER_TOKEN;
@@ -478,6 +478,9 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         functionResponse: fr,
       })) as unknown as Array<{ text: string }>,
     });
+
+    // Log what we're sending back
+    console.log(`Contents [${i}]:`, JSON.stringify(contents.slice(-2)));
 
     // Get next response
     response = await ai.models.generateContent({
