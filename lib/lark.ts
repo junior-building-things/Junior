@@ -698,7 +698,10 @@ export async function listChatMessages(
         has_more?: boolean;
       };
     };
-    if (data.code !== 0) break;
+    if (data.code !== 0) {
+      console.error(`listChatMessages error for ${chatId}: ${data.code}`, JSON.stringify(data).slice(0, 200));
+      break;
+    }
 
     for (const msg of data.data?.items ?? []) {
       let content = '';
