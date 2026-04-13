@@ -247,23 +247,3 @@ export async function updateFeatureFields(
   await callMeegoMcp('update_field', { project_key: projectKey, work_item_id: workItemId, fields: updates });
   return 'Feature updated successfully.';
 }
-
-/** Fetch basic feature info for card messages */
-export async function getFeatureBrief(projectKey: string, workItemId: string): Promise<{
-  name: string;
-  priority: string;
-  prd: string;
-  meegoUrl: string;
-}> {
-  const meegoUrl = `https://meego.larkoffice.com/${projectKey}/story/detail/${workItemId}`;
-  const raw = await callMeegoMcp('get_workitem_brief', {
-    url: meegoUrl,
-    fields: ['wiki', 'priority'],
-  });
-
-  const name = parseWorkItemField(raw, '工作项名称') || `Feature ${workItemId}`;
-  const prd = parseWorkItemField(raw, 'PRD') || '';
-  const priorityRaw = parseWorkItemField(raw, '优先级') || 'P2';
-
-  return { name, priority: priorityRaw, prd, meegoUrl };
-}

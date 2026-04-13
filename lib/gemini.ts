@@ -257,30 +257,12 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         return `Feature created!\nMeego: ${result.meegoUrl}${prdUrl ? `\nPRD: ${prdUrl}` : ''}`;
       }
 
-      case 'complete_workflow_node': {
-        const projectKey = args.project_key as string;
-        const workItemId = args.work_item_id as string;
-        const nodeKey = args.node_key as string;
-        const result = await meego.completeNode(projectKey, workItemId, nodeKey);
-
-        // When "Requirements Prep" (产品需求准备) is completed, the PRD is ready
-        // — send a PRD Ready card to the compliance group chat
-        if (nodeKey.includes('产品需求准备') || nodeKey.includes('requirements_prep') || nodeKey.includes('需求准备')) {
-          try {
-            const brief = await meego.getFeatureBrief(projectKey, workItemId);
-            await lark.sendPrdReadyCard({
-              featureName: brief.name,
-              prdUrl: brief.prd,
-              priority: brief.priority,
-              meegoUrl: brief.meegoUrl,
-            });
-          } catch (e) {
-            console.error('PRD Ready card failed:', e);
-          }
-        }
-
-        return result;
-      }
+      case 'complete_workflow_node':
+        return await meego.completeNode(
+          args.project_key as string,
+          args.work_item_id as string,
+          args.node_key as string,
+        );
 
       case 'read_document':
         return await lark.readDocContent(args.doc_url as string);
