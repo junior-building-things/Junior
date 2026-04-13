@@ -135,39 +135,6 @@ export async function getMyFeatures(): Promise<string> {
   ).join('\n');
 }
 
-/** Structured version of getMyFeatures for internal use */
-export async function listActiveFeatures(): Promise<Array<{ name: string; id: number; node: string; nodeCn: string; project: string }>> {
-  const items: Array<{ name: string; id: number; node: string; nodeCn: string; project: string }> = [];
-  let page = 1;
-
-  while (true) {
-    const raw = await callMeegoMcp('list_todo', { action: 'todo', page_num: page });
-    const data = JSON.parse(raw) as {
-      total: number;
-      list: Array<{
-        work_item_info: { work_item_id: number; work_item_name: string };
-        project_key: string;
-        node_info: { node_name: string };
-      }>;
-    };
-
-    for (const item of data.list ?? []) {
-      const nodeCn = item.node_info?.node_name ?? '';
-      items.push({
-        name: item.work_item_info.work_item_name,
-        id: item.work_item_info.work_item_id,
-        node: translateNode(nodeCn),
-        nodeCn,
-        project: item.project_key,
-      });
-    }
-    if (items.length >= data.total) break;
-    page++;
-  }
-
-  return items;
-}
-
 export async function getFeatureStatus(meegoUrl: string): Promise<string> {
   const raw = await callMeegoMcp('get_workitem_brief', { url: meegoUrl });
   // Return full MCP response — let Gemini extract whatever the user asked about
