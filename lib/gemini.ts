@@ -196,6 +196,30 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'search_feature_chat',
+    description: 'Search a feature\'s Lark group chat for specific content — Libra/AB experiment links, recent discussions, decisions, or any keyword. Searches the last 30 days of messages including thread replies. Use when looking for links or info that was shared in the chat.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        feature_name: { type: Type.STRING, description: 'Feature name to find the group chat' },
+        search_term: { type: Type.STRING, description: 'Keyword to search for (e.g. "libra", "blocker", "figma", "deadline")' },
+        meego_url: { type: Type.STRING, description: 'Optional: Meego URL to match chat by work item ID' },
+      },
+      required: ['feature_name', 'search_term'],
+    },
+  },
+  {
+    name: 'search_lark_drive',
+    description: 'Search Lark Drive for documents matching a query — finds AB reports, analysis docs, design specs, etc. Returns document titles and URLs. Use when looking for AB experiment reports or other docs related to a feature.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: { type: Type.STRING, description: 'Search query (e.g. "AB Report Photo Comment Sticker")' },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'get_hamlet_feature',
     description: 'Get enriched feature data from the Hamlet cache — includes risk level, risk notes, version history, links (Figma, Libra, AB report, PRD, compliance), and full team roster. FASTER than Meego calls and includes data Meego doesn\'t have (risk assessment, version change history). Use this FIRST before get_feature_status for any feature question. Search by partial name, keywords, or abbreviation.',
     parameters: {
@@ -338,6 +362,42 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         );
 
 
+      case 'search_feature_chat': {
+        const chatId = await lark.joinFeatureChat(
+          args.feature_name as string,
+          args.meego_url as string | undefined,
+        );
+        if (!chatId) return `Could not find a group chat for "${args.feature_name}".`;
+        const token = await lark.getTenantToken();
+        const nowSec = Math.floor(Date.now() / 1000);
+        const sinceSec = nowSec - 30 * 24 * 60 * 60; // 30 days ago
+        const messages = await lark.listChatMessages(chatId, sinceSec, nowSec, token);
+        const term = (args.search_term as string).toLowerCase();
+        const matches = messages
+          .filter(m => m.content.toLowerCase().includes(term))
+          .slice(0, 10)
+          .map(m => {
+            const time = m.create_time ? new Date(Number(m.create_time) * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+            return `${time}: ${m.content.slice(0, 300)}`;
+          });
+        if (matches.length === 0) return `No messages containing "${args.search_term}" found in the last 30 days.`;
+        return `Found ${matches.length} message(s) mentioning "${args.search_term}":\n${matches.join('\n')}`;
+      }
+
+      case 'search_lark_drive': {
+        const token = await lark.getTenantToken();
+        const res = await fetch('https://open.larksuite.com/open-apis/suite/docs-api/search/object', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ search_key: args.query as string, count: 10, offset: 0, docs_types: ['doc', 'docx', 'sheet', 'bitable'] }),
+        });
+        const data = await res.json() as { code: number; data?: { docs_entities?: Array<{ docs_token: string; docs_type: string; title: string }> } };
+        if (data.code !== 0) return 'Lark Drive search failed.';
+        const docs = data.data?.docs_entities ?? [];
+        if (docs.length === 0) return `No documents found for "${args.query}".`;
+        return docs.map(d => `${d.title}: https://bytedance.sg.larkoffice.com/${d.docs_type}/${d.docs_token}`).join('\n');
+      }
+
       case 'get_hamlet_feature': {
         const features = await loadHamletFeatures();
         const match = findFeature(features, args.query as string);
@@ -448,6 +508,8 @@ You have access to tools for:
 - **Hamlet cache (FASTEST)**: get_hamlet_feature and get_hamlet_overview — reads enriched feature data from Hamlet's cache including risk level, risk notes, version history, Figma/Libra/AB report links, and full team roster. ALWAYS try this first before calling Meego.
 - **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes, update feature fields (name, PRD, priority). Use as fallback when Hamlet cache doesn't have the data.
 - **Documents (Lark)**: Read, edit sections, rename sections, add sections, add/list/reply to comments, duplicate documents, create PRD from template
+- **Lark Drive search**: Find AB reports, analysis docs, or design specs by keyword
+- **Chat search**: Search a feature's Lark group chat for specific content (Libra links, decisions, blockers)
 - **Package builds**: Get the latest package download URL (APK/IPA) for a feature from its Lark group chat
 - **Conversations**: Summarize all Lark conversations from the last 1, 2, or 7 days, grouped by topic with automation suggestions
 
