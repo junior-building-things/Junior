@@ -232,7 +232,7 @@ const tools: FunctionDeclaration[] = [
   },
   {
     name: 'get_hamlet_overview',
-    description: 'Get a summary of all features from the Hamlet cache — total count, status breakdown, risk distribution. Use for questions like "how many features are in dev?", "what\'s my portfolio status?", "any high risk features?".',
+    description: 'Get all features from the Hamlet cache with key details (name, status, priority, version, risk, tech owner). Use for ANY question that involves listing, filtering, or counting features — e.g. "list ongoing features", "what are my P2 features", "which features is Kyle tech owner of", "any high risk features", "features in AB Testing".',
     parameters: { type: Type.OBJECT, properties: {} },
   },
   {
@@ -407,31 +407,21 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
 
       case 'get_hamlet_overview': {
         const features = await loadHamletFeatures();
-        const byStatus: Record<string, string[]> = {};
-        const riskCounts: Record<string, number> = { high: 0, medium: 0, low: 0 };
-        for (const f of features) {
-          (byStatus[f.status] ??= []).push(f.name);
-          if (f.riskLevel === 'red') riskCounts.high++;
-          else if (f.riskLevel === 'yellow') riskCounts.medium++;
-          else if (f.riskLevel === 'green') riskCounts.low++;
-        }
-        const lines = [
-          `Total features: ${features.length}`,
-          `Risk: High: ${riskCounts.high}, Medium: ${riskCounts.medium}, Low: ${riskCounts.low}`,
-          '',
-          'Features by status:',
-        ];
-        for (const [status, names] of Object.entries(byStatus)) {
-          lines.push(`\n${status} (${names.length}):`);
-          for (const name of names) lines.push(`  - ${name}`);
-        }
-        // List high-risk features with reasons
-        const highRisk = features.filter(f => f.riskLevel === 'red');
-        if (highRisk.length > 0) {
-          lines.push(`\nHigh risk features:`);
-          for (const f of highRisk) {
-            lines.push(`  - ${f.name}: ${f.riskNotes?.join(', ') ?? 'no notes'}`);
+        const lines = [`Total features: ${features.length}`, ''];
+        // Group by status, each feature as a compact one-liner
+        const byStatus: Record<string, typeof features> = {};
+        for (const f of features) (byStatus[f.status] ??= []).push(f);
+        for (const [status, group] of Object.entries(byStatus)) {
+          lines.push(`${status} (${group.length}):`);
+          for (const f of group) {
+            const parts = [f.name];
+            if (f.priority) parts.push(`[${f.priority}]`);
+            if (f.iosVersion) parts.push(`v${f.iosVersion}`);
+            if (f.riskLevel) parts.push(`risk:${f.riskLevel === 'red' ? 'high' : f.riskLevel === 'yellow' ? 'medium' : 'low'}`);
+            if (f.techOwner) parts.push(`tech:${f.techOwner}`);
+            lines.push(`  - ${parts.join(' | ')}`);
           }
+          lines.push('');
         }
         return lines.join('\n');
       }
