@@ -156,14 +156,13 @@ function markdownCardContent(text: string): string {
 
 export async function sendMessage(chatId: string, text: string): Promise<void> {
   const token = await getTenantToken();
-  const isMarkdown = hasMarkdown(text);
   await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       receive_id: chatId,
-      msg_type: isMarkdown ? 'interactive' : 'text',
-      content: isMarkdown ? markdownCardContent(text) : JSON.stringify({ text }),
+      msg_type: 'interactive',
+      content: markdownCardContent(text),
     }),
   });
 }
@@ -175,34 +174,17 @@ export async function sendReply(
   mentionName?: string,
 ): Promise<void> {
   const token = await getTenantToken();
-  const isMarkdown = hasMarkdown(text);
-
-  if (isMarkdown) {
-    // Interactive cards support markdown natively. Prepend @mention if needed.
-    const md = mentionOpenId
-      ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at>\n${text}`
-      : text;
-    await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        msg_type: 'interactive',
-        content: markdownCardContent(md),
-      }),
-    });
-  } else {
-    const content = mentionOpenId
-      ? `<at user_id="${mentionOpenId}">${mentionName ?? 'there'}</at> ${text}`
-      : text;
-    await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        msg_type: 'text',
-        content: JSON.stringify({ text: content }),
-      }),
-    });
-  }
+  const md = mentionOpenId
+    ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at>\n${text}`
+    : text;
+  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      msg_type: 'interactive',
+      content: markdownCardContent(md),
+    }),
+  });
 }
 
 export async function sendCardMessage(chatId: string, title: string, markdown: string): Promise<void> {
