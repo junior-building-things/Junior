@@ -525,6 +525,7 @@ Behavior guidelines:
 - You can handle both English and Chinese messages. Always reply in English.
 - When Meego data contains Chinese (e.g. status "已上车", node names, field labels), always translate to English in your reply.
 - Don't apologize excessively. Just do the thing.
+- NEVER use italic formatting (*text*). Use **bold** for emphasis instead.
 - When asked "what can you do" or "help", describe YOUR specific capabilities (Meego features, Lark docs, package builds, stock prices, conversation summaries). Never give a generic AI capabilities list.
 - When the user asks to summarize conversations, messages, or chats from recent days/today/this week, use the summarize_conversations tool.`;
 
@@ -596,7 +597,9 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       });
     }
 
-    return response.text ?? 'No response generated.';
+    // Strip single-asterisk italics (*text*) but keep bold (**text**)
+    const text = response.text ?? 'No response generated.';
+    return text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '$1');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'TimeoutError') {
       return 'Sorry, that took too long. Try a simpler question or try again?';
