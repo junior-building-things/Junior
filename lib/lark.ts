@@ -141,15 +141,29 @@ export async function getUserToken(): Promise<string | null> {
 
 // ─── Message sending ─────────────────────────────────────────────────────────
 
+/** Check if text contains markdown formatting that needs rich rendering. */
+function hasMarkdown(text: string): boolean {
+  return /\*\*[^*]+\*\*|\*[^*]+\*|^[\s]*[-*]\s/m.test(text);
+}
+
+/** Build an interactive card body with markdown content (no header). */
+function markdownCardContent(text: string): string {
+  return JSON.stringify({
+    config: { wide_screen_mode: true },
+    elements: [{ tag: 'markdown', content: text }],
+  });
+}
+
 export async function sendMessage(chatId: string, text: string): Promise<void> {
   const token = await getTenantToken();
+  const isMarkdown = hasMarkdown(text);
   await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       receive_id: chatId,
-      msg_type: 'text',
-      content: JSON.stringify({ text }),
+      msg_type: isMarkdown ? 'interactive' : 'text',
+      content: isMarkdown ? markdownCardContent(text) : JSON.stringify({ text }),
     }),
   });
 }
@@ -161,18 +175,34 @@ export async function sendReply(
   mentionName?: string,
 ): Promise<void> {
   const token = await getTenantToken();
-  const content = mentionOpenId
-    ? `<at user_id="${mentionOpenId}">${mentionName ?? 'there'}</at> ${text}`
-    : text;
+  const isMarkdown = hasMarkdown(text);
 
-  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      msg_type: 'text',
-      content: JSON.stringify({ text: content }),
-    }),
-  });
+  if (isMarkdown) {
+    // Interactive cards support markdown natively. Prepend @mention if needed.
+    const md = mentionOpenId
+      ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at>\n${text}`
+      : text;
+    await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        msg_type: 'interactive',
+        content: markdownCardContent(md),
+      }),
+    });
+  } else {
+    const content = mentionOpenId
+      ? `<at user_id="${mentionOpenId}">${mentionName ?? 'there'}</at> ${text}`
+      : text;
+    await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        msg_type: 'text',
+        content: JSON.stringify({ text: content }),
+      }),
+    });
+  }
 }
 
 export async function sendCardMessage(chatId: string, title: string, markdown: string): Promise<void> {
