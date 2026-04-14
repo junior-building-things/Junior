@@ -175,7 +175,7 @@ export async function sendReply(
 ): Promise<void> {
   const token = await getTenantToken();
   const md = mentionOpenId
-    ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at>\n${text}`
+    ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at> ${text}`
     : text;
   await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
     method: 'POST',
