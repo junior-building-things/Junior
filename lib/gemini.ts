@@ -592,9 +592,10 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       });
     }
 
-    // Strip single-asterisk italics (*text*) but keep bold (**text**)
+    // Strip all italic markers while preserving bold (**text**)
+    // 1. Shelter bold markers  2. Remove remaining *  3. Restore bold
     const text = response.text ?? 'No response generated.';
-    return text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '$1');
+    return text.replace(/\*\*/g, '\x00').replace(/\*/g, '').replace(/\x00/g, '**');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'TimeoutError') {
       return 'Sorry, that took too long. Try a simpler question or try again?';
