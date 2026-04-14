@@ -407,20 +407,25 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
 
       case 'get_hamlet_overview': {
         const features = await loadHamletFeatures();
-        const statusCounts: Record<string, number> = {};
+        const byStatus: Record<string, string[]> = {};
         const riskCounts: Record<string, number> = { high: 0, medium: 0, low: 0 };
         for (const f of features) {
-          statusCounts[f.status] = (statusCounts[f.status] ?? 0) + 1;
+          (byStatus[f.status] ??= []).push(f.name);
           if (f.riskLevel === 'red') riskCounts.high++;
           else if (f.riskLevel === 'yellow') riskCounts.medium++;
           else if (f.riskLevel === 'green') riskCounts.low++;
         }
         const lines = [
           `Total features: ${features.length}`,
-          `Status: ${Object.entries(statusCounts).map(([s, n]) => `${s}: ${n}`).join(', ')}`,
           `Risk: High: ${riskCounts.high}, Medium: ${riskCounts.medium}, Low: ${riskCounts.low}`,
+          '',
+          'Features by status:',
         ];
-        // List high-risk features
+        for (const [status, names] of Object.entries(byStatus)) {
+          lines.push(`\n${status} (${names.length}):`);
+          for (const name of names) lines.push(`  - ${name}`);
+        }
+        // List high-risk features with reasons
         const highRisk = features.filter(f => f.riskLevel === 'red');
         if (highRisk.length > 0) {
           lines.push(`\nHigh risk features:`);
