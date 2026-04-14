@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, FunctionCallingConfigMode, FunctionDeclaration } fro
 import { ChatMessage } from './types';
 import * as meego from './meego';
 import * as lark from './lark';
+import { loadHamletFeatures, findFeature, formatFeature } from './hamlet-cache';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash-lite';
@@ -195,6 +196,22 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'get_hamlet_feature',
+    description: 'Get enriched feature data from the Hamlet cache — includes risk level, risk notes, version history, links (Figma, Libra, AB report, PRD, compliance), and full team roster. FASTER than Meego calls and includes data Meego doesn\'t have (risk assessment, version change history). Use this FIRST before get_feature_status for any feature question. Search by partial name, keywords, or abbreviation.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: { type: Type.STRING, description: 'Feature name or keywords to search for (e.g. "ai self mix studio", "photo comment sticker")' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_hamlet_overview',
+    description: 'Get a summary of all features from the Hamlet cache — total count, status breakdown, risk distribution. Use for questions like "how many features are in dev?", "what\'s my portfolio status?", "any high risk features?".',
+    parameters: { type: Type.OBJECT, properties: {} },
+  },
+  {
     name: 'whoami',
     description: 'Get the current user\'s Lark identity info (open_id, name). Use when the user asks "who am I", "what\'s my open id", or similar.',
     parameters: { type: Type.OBJECT, properties: {} },
@@ -321,6 +338,39 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         );
 
 
+      case 'get_hamlet_feature': {
+        const features = await loadHamletFeatures();
+        const match = findFeature(features, args.query as string);
+        if (!match) return `No feature found matching "${args.query}".`;
+        return formatFeature(match);
+      }
+
+      case 'get_hamlet_overview': {
+        const features = await loadHamletFeatures();
+        const statusCounts: Record<string, number> = {};
+        const riskCounts: Record<string, number> = { high: 0, medium: 0, low: 0 };
+        for (const f of features) {
+          statusCounts[f.status] = (statusCounts[f.status] ?? 0) + 1;
+          if (f.riskLevel === 'red') riskCounts.high++;
+          else if (f.riskLevel === 'yellow') riskCounts.medium++;
+          else if (f.riskLevel === 'green') riskCounts.low++;
+        }
+        const lines = [
+          `Total features: ${features.length}`,
+          `Status: ${Object.entries(statusCounts).map(([s, n]) => `${s}: ${n}`).join(', ')}`,
+          `Risk: High: ${riskCounts.high}, Medium: ${riskCounts.medium}, Low: ${riskCounts.low}`,
+        ];
+        // List high-risk features
+        const highRisk = features.filter(f => f.riskLevel === 'red');
+        if (highRisk.length > 0) {
+          lines.push(`\nHigh risk features:`);
+          for (const f of highRisk) {
+            lines.push(`  - ${f.name}: ${f.riskNotes?.join(', ') ?? 'no notes'}`);
+          }
+        }
+        return lines.join('\n');
+      }
+
       case 'whoami':
         return JSON.stringify({ open_id: ctx.senderOpenId ?? 'unknown', name: ctx.senderName ?? 'unknown' });
 
@@ -395,7 +445,8 @@ Rules:
 const SYSTEM_PROMPT = `You are Junior, a friendly and capable AI assistant in a Lark group chat.
 
 You have access to tools for:
-- **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes, update feature fields (name, PRD, priority)
+- **Hamlet cache (FASTEST)**: get_hamlet_feature and get_hamlet_overview — reads enriched feature data from Hamlet's cache including risk level, risk notes, version history, Figma/Libra/AB report links, and full team roster. ALWAYS try this first before calling Meego.
+- **Project management (Meego)**: List features, check status, search features, create new features, complete workflow nodes, update feature fields (name, PRD, priority). Use as fallback when Hamlet cache doesn't have the data.
 - **Documents (Lark)**: Read, edit sections, rename sections, add sections, add/list/reply to comments, duplicate documents, create PRD from template
 - **Package builds**: Get the latest package download URL (APK/IPA) for a feature from its Lark group chat
 - **Conversations**: Summarize all Lark conversations from the last 1, 2, or 7 days, grouped by topic with automation suggestions
@@ -404,7 +455,8 @@ Behavior guidelines:
 - Be concise and natural in conversation. Keep replies short unless detail is needed.
 - When casual, be witty and friendly. When serious, be analytical and precise.
 - Use tools proactively when the user's request involves project data, documents, or stock info.
-- When the user asks about "project status", "my features", "what am I working on", or similar — always use get_my_features or search_feature first. Never give generic advice about project management. You ARE their project management tool.
+- When the user asks about a specific feature, ALWAYS use get_hamlet_feature first (fastest, has risk/links/team). Only fall back to get_feature_status or search_feature if the Hamlet cache doesn't have the info.
+- When the user asks about "project status", "my features", "what am I working on", or similar — use get_hamlet_overview first for a quick summary, then get_my_features if more detail is needed.
 - When creating features, always create a PRD unless the user says not to.
 - When showing feature info, include relevant links (Meego, PRD).
 - Only ask for clarification when you truly cannot proceed. Default to action — call a tool and show results rather than asking what the user means.
