@@ -29,6 +29,11 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
+  // ?dryRun=true marks all past-Requirements-Prep features as "already sent"
+  // without actually sending cards. Useful for initial backfill so existing
+  // features don't trigger a flood of cards on the first real run.
+  const dryRun = req.nextUrl.searchParams.get('dryRun') === 'true';
+
   try {
     const features = await listActiveFeatures();
     let sent = 0;
@@ -42,6 +47,11 @@ export async function GET(req: NextRequest) {
       const dedupKey = `prd-ready:${f.project}:${f.id}`;
       const isNew = await recordEventOnce(dedupKey);
       if (!isNew) continue;
+
+      if (dryRun) {
+        sentIds.push(`${f.name} (${f.id}) [marked]`);
+        continue;
+      }
 
       try {
         const brief = await getFeatureBrief(f.project, String(f.id));
@@ -59,7 +69,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ checked: features.length, sent, sentIds });
+    return NextResponse.json({ dryRun, checked: features.length, sent, sentIds });
   } catch (err) {
     console.error('[poll] Error:', err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
