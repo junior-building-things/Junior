@@ -53,6 +53,7 @@ export interface HamletFeature {
   quarterlyCycle?: string;
   lastUpdated?: string;
   chatId?: string;
+  pocEmails?: Record<string, string>;  // name → email for @mentions
 }
 
 interface FeatureCache {
@@ -105,6 +106,15 @@ export function findFeature(features: HamletFeature[], query: string): HamletFea
  * Format a feature into a readable string for Gemini to use in its response.
  */
 export function formatFeature(f: HamletFeature): string {
+  // Annotate owner names with their email for @mention lookup.
+  // Gemini should render these as <at email=xxx></at> tags.
+  const withEmail = (name?: string): string => {
+    if (!name) return '';
+    const firstName = name.split(',')[0]?.trim();
+    const email = firstName ? f.pocEmails?.[firstName] : undefined;
+    return email ? `${name} [email=${email}]` : name;
+  };
+
   const lines: string[] = [`Feature: ${f.name}`];
   if (f.status)          lines.push(`Status: ${f.status}`);
   if (f.priority)        lines.push(`Priority: ${f.priority}`);
@@ -112,16 +122,16 @@ export function formatFeature(f: HamletFeature): string {
   if (f.versionHistory?.length) lines.push(`Version History: ${f.versionHistory.join(' → ')}`);
   if (f.riskLevel)       lines.push(`Risk: ${f.riskLevel === 'red' ? 'High' : f.riskLevel === 'yellow' ? 'Medium' : 'Low'}`);
   if (f.riskNotes?.length) lines.push(`Risk Notes: ${f.riskNotes.join(', ')}`);
-  if (f.owner)           lines.push(`Owner: ${f.owner}`);
-  if (f.pmOwner)         lines.push(`PM: ${f.pmOwner}`);
-  if (f.techOwner)       lines.push(`Tech Owner: ${f.techOwner}`);
-  if (f.iosOwner)        lines.push(`iOS: ${f.iosOwner}`);
-  if (f.androidOwner)    lines.push(`Android: ${f.androidOwner}`);
-  if (f.serverOwner)     lines.push(`Server: ${f.serverOwner}`);
-  if (f.qaOwner)         lines.push(`QA: ${f.qaOwner}`);
-  if (f.uiuxOwner)       lines.push(`UX: ${f.uiuxOwner}`);
-  if (f.daOwner)         lines.push(`DS: ${f.daOwner}`);
-  if (f.contentDesigner) lines.push(`Content Designer: ${f.contentDesigner}`);
+  if (f.owner)           lines.push(`Owner: ${withEmail(f.owner)}`);
+  if (f.pmOwner)         lines.push(`PM: ${withEmail(f.pmOwner)}`);
+  if (f.techOwner)       lines.push(`Tech Owner: ${withEmail(f.techOwner)}`);
+  if (f.iosOwner)        lines.push(`iOS: ${withEmail(f.iosOwner)}`);
+  if (f.androidOwner)    lines.push(`Android: ${withEmail(f.androidOwner)}`);
+  if (f.serverOwner)     lines.push(`Server: ${withEmail(f.serverOwner)}`);
+  if (f.qaOwner)         lines.push(`QA: ${withEmail(f.qaOwner)}`);
+  if (f.uiuxOwner)       lines.push(`UX: ${withEmail(f.uiuxOwner)}`);
+  if (f.daOwner)         lines.push(`DS: ${withEmail(f.daOwner)}`);
+  if (f.contentDesigner) lines.push(`Content Designer: ${withEmail(f.contentDesigner)}`);
   if (f.prd)             lines.push(`PRD: ${f.prd}`);
   if (f.figmaUrl)        lines.push(`Figma: ${f.figmaUrl}`);
   if (f.meegoUrl)        lines.push(`Meego: ${f.meegoUrl}`);
