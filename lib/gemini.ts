@@ -439,10 +439,12 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         const rawConversations = await lark.fetchRecentConversations(userToken, userOpenId, days);
         if (rawConversations.startsWith('No ')) return rawConversations;
 
+        const { getPrompt } = await import('./prompts');
+        const summaryPrompt = await getPrompt('junior.conversation_summary', CONVERSATION_SUMMARY_PROMPT);
         const summaryResponse = await ai.models.generateContent({
           model: MODEL,
           contents: [{ role: 'user', parts: [{ text: rawConversations }] }],
-          config: { systemInstruction: CONVERSATION_SUMMARY_PROMPT },
+          config: { systemInstruction: summaryPrompt },
         });
         return summaryResponse.text ?? 'Could not generate summary.';
       }
@@ -554,11 +556,13 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
   }));
 
   try {
+    const { getPrompt } = await import('./prompts');
+    const systemInstruction = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
     const chatSession = ai.chats.create({
       model: MODEL,
       history: chatHistory,
       config: {
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction,
         tools: [{ functionDeclarations: tools }],
         toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
       },

@@ -66,14 +66,20 @@ export async function GET(req: NextRequest) {
   if (!chatId) return new NextResponse('No PROACTIVE_CHAT_ID', { status: 500 });
 
   const snapshot = await buildMarketSnapshot();
-  const prompt = `Generate today's update.\nUse the snapshot below as input and web search for context.\n${snapshot}`;
+  const { getPrompt, renderPrompt } = await import('@/lib/prompts');
+  const userTmpl = await getPrompt(
+    'junior.daily_stocks_user',
+    `Generate today's update.\nUse the snapshot below as input and web search for context.\n\${snapshot}`,
+  );
+  const prompt = renderPrompt(userTmpl, { snapshot });
+  const systemInstruction = await getPrompt('junior.daily_stocks_system', DAILY_SYSTEM_PROMPT);
 
   try {
     const response = await ai.models.generateContent({
       model: MODEL,
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
-        systemInstruction: DAILY_SYSTEM_PROMPT,
+        systemInstruction,
         tools: [{ googleSearch: {} }],
       },
     });
