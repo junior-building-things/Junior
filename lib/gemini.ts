@@ -254,7 +254,7 @@ const tools: FunctionDeclaration[] = [
 
 // ─── Tool execution ──────────────────────────────────────────────────────────
 
-interface ChatContext { senderOpenId?: string; senderName?: string }
+interface ChatContext { senderOpenId?: string; senderName?: string; chatId?: string }
 
 async function executeTool(name: string, args: Record<string, unknown>, ctx: ChatContext = {}): Promise<string> {
   try {
@@ -555,9 +555,27 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     parts: [{ text: m.content }],
   }));
 
+  // Auto-resolve the feature based on the current chat. If Junior is in a
+  // feature group chat, the Hamlet cache has the feature linked by chatId.
+  // We prepend that feature's data to the system prompt so questions like
+  // "what's the figma for this feature" work without naming the feature.
+  let chatFeatureContext = '';
+  if (ctx.chatId) {
+    try {
+      const features = await loadHamletFeatures();
+      const match = features.find(f => f.chatId === ctx.chatId);
+      if (match) {
+        chatFeatureContext = `\n\nCURRENT FEATURE CONTEXT (the user is asking from this feature's group chat):\n${formatFeature(match)}\n\nWhen the user says "this feature", "the feature", or asks about something without naming a feature, assume they mean THIS feature. Use the data above directly to answer — no need to call get_hamlet_feature.`;
+      }
+    } catch (e) {
+      console.warn('[gemini] failed to resolve chat feature context:', e);
+    }
+  }
+
   try {
     const { getPrompt } = await import('./prompts');
-    const systemInstruction = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
+    const baseSystemPrompt = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
+    const systemInstruction = baseSystemPrompt + chatFeatureContext;
     const chatSession = ai.chats.create({
       model: MODEL,
       history: chatHistory,
