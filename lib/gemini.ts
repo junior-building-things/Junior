@@ -573,9 +573,13 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
   }
 
   try {
-    const { getPrompt } = await import('./prompts');
+    const { getPrompt, getPromptThinkingBudget, thinkingBudgetToConfig } = await import('./prompts');
     const baseSystemPrompt = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
     const systemInstruction = baseSystemPrompt + chatFeatureContext;
+    // Thinking budget is editable per-prompt from the Hamlet Prompts tab.
+    // Defaults to 'dynamic' (model decides per round). CHAT_TIMEOUT_MS
+    // (60s) is the safety net against runaway thinking on large prompts.
+    const thinkingBudget = await getPromptThinkingBudget('junior.system_prompt', 'dynamic');
     const chatSession = ai.chats.create({
       model: MODEL,
       history: chatHistory,
@@ -583,11 +587,7 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         systemInstruction,
         tools: [{ functionDeclarations: tools }],
         toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
-        // Dynamic thinking (the model decides budget per round) — works
-        // for complex multi-step questions but each round can take
-        // 13-15s on gemini-3.1-flash-lite-preview when the prompt is
-        // large. CHAT_TIMEOUT_MS (60s) is the safety net.
-        thinkingConfig: { thinkingBudget: -1 },
+        thinkingConfig: thinkingBudgetToConfig(thinkingBudget),
       },
     });
 

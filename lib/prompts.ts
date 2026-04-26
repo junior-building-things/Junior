@@ -1,3 +1,5 @@
+import { ThinkingConfig, ThinkingLevel } from '@google/genai';
+
 /**
  * Read prompt overrides from the shared GCS file managed by Hamlet.
  *
@@ -27,7 +29,15 @@ async function getMetadataToken(): Promise<string> {
   return cachedToken.token;
 }
 
-interface PromptOverride { content: string; updatedAt: string; updatedBy?: string }
+/** Mirrors Hamlet's `lib/prompts.ts` ThinkingBudget. */
+export type ThinkingBudget = 'dynamic' | 'off' | 'minimal' | 'low' | 'medium' | 'high';
+
+interface PromptOverride {
+  content?: string;
+  thinkingBudget?: ThinkingBudget;
+  updatedAt: string;
+  updatedBy?: string;
+}
 type PromptOverrides = Record<string, PromptOverride>;
 
 let memCache: { data: PromptOverrides; fetchedAt: number } | null = null;
@@ -57,6 +67,34 @@ async function loadOverrides(): Promise<PromptOverrides> {
 export async function getPrompt(id: string, fallback: string): Promise<string> {
   const overrides = await loadOverrides();
   return overrides[id]?.content ?? fallback;
+}
+
+/**
+ * Get the thinking-budget setting for a prompt. Returns the override if
+ * set, else the provided fallback (default 'dynamic').
+ */
+export async function getPromptThinkingBudget(
+  id: string,
+  fallback: ThinkingBudget = 'dynamic',
+): Promise<ThinkingBudget> {
+  const overrides = await loadOverrides();
+  return overrides[id]?.thinkingBudget ?? fallback;
+}
+
+/**
+ * Map a ThinkingBudget value to the SDK's ThinkingConfig shape. Returned
+ * object is always non-empty so callers can pass it directly:
+ *   thinkingConfig: thinkingBudgetToConfig(budget)
+ */
+export function thinkingBudgetToConfig(budget: ThinkingBudget): ThinkingConfig {
+  switch (budget) {
+    case 'dynamic': return { thinkingBudget: -1 };
+    case 'off':     return { thinkingBudget: 0 };
+    case 'minimal': return { thinkingLevel: ThinkingLevel.MINIMAL };
+    case 'low':     return { thinkingLevel: ThinkingLevel.LOW };
+    case 'medium':  return { thinkingLevel: ThinkingLevel.MEDIUM };
+    case 'high':    return { thinkingLevel: ThinkingLevel.HIGH };
+  }
 }
 
 /**
