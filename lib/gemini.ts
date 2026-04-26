@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, FunctionCallingConfigMode, FunctionDeclaration, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, Type, FunctionCallingConfigMode, FunctionDeclaration } from '@google/genai';
 import { ChatMessage } from './types';
 import * as meego from './meego';
 import * as lark from './lark';
@@ -583,13 +583,11 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         systemInstruction,
         tools: [{ functionDeclarations: tools }],
         toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
-        // Tool routing doesn't need deep reasoning, and dynamic thinking
-        // (the default) on gemini-3.1-flash-lite-preview adds 10+s per
-        // round when the prompt is large (long system instruction + ~30
-        // tool decls), busting CHAT_TIMEOUT_MS once multi-turn function
-        // calling kicks in. LOW gives the model just enough headroom to
-        // pick the right tool without blowing the time budget.
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        // Dynamic thinking (the model decides budget per round) — works
+        // for complex multi-step questions but each round can take
+        // 13-15s on gemini-3.1-flash-lite-preview when the prompt is
+        // large. CHAT_TIMEOUT_MS (60s) is the safety net.
+        thinkingConfig: { thinkingBudget: -1 },
       },
     });
 
