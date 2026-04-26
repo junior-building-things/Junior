@@ -529,7 +529,7 @@ Behavior guidelines:
 
 // ─── Main chat function ──────────────────────────────────────────────────────
 
-const CHAT_TIMEOUT_MS = 30_000;
+const CHAT_TIMEOUT_MS = 60_000;
 
 export async function chat(history: ChatMessage[], userMessage: string, ctx: ChatContext = {}): Promise<string> {
   // Abort the entire chat flow if it exceeds the timeout
@@ -583,6 +583,12 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         systemInstruction,
         tools: [{ functionDeclarations: tools }],
         toolConfig: { functionCallingConfig: { mode: FunctionCallingConfigMode.AUTO } },
+        // Tool routing doesn't need deep reasoning, and thinking on
+        // gemini-3.1-flash-lite-preview adds 10+s per round when the
+        // prompt is large (long system instruction + ~30 tool decls),
+        // which busts CHAT_TIMEOUT_MS once multi-turn function calling
+        // kicks in. Disable it for the chat path.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     });
 
