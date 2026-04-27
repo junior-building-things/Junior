@@ -40,6 +40,15 @@ export interface HamletFeature {
   versionHistory?: string[];
   riskLevel?: string;
   riskNotes?: string[];
+  /**
+   * Planned-version / launch-date slips detected by Hamlet's digest.
+   * Each entry is `{date: 'YYYY-MM-DD', from, to}`. When non-empty the
+   * feature is "Delayed" — even when riskLevel is null (Hamlet
+   * suppresses riskLevel for AB Testing but keeps versionChanges so
+   * the Delayed badge still renders). Junior should treat this as
+   * the effective risk.
+   */
+  versionChanges?: Array<{ date: string; from: string; to: string }>;
   pmOwner?: string;
   techOwner?: string;
   iosOwner?: string;
@@ -120,7 +129,23 @@ export function formatFeature(f: HamletFeature): string {
   if (f.priority)        lines.push(`Priority: ${f.priority}`);
   if (f.iosVersion)      lines.push(`Version: ${f.iosVersion}`);
   if (f.versionHistory?.length) lines.push(`Version History: ${f.versionHistory.join(' → ')}`);
-  if (f.riskLevel)       lines.push(`Risk: ${f.riskLevel === 'red' ? 'High' : f.riskLevel === 'yellow' ? 'Medium' : 'Low'}`);
+  // Risk: prefer the explicit Delayed signal (versionChanges) over
+  // riskLevel — Hamlet suppresses riskLevel for AB Testing features
+  // but keeps versionChanges populated as the Delayed indicator. List
+  // every slip in the tooltip-style "M/D: from → to" format.
+  const isDelayed = (f.versionChanges?.length ?? 0) > 0;
+  if (isDelayed) {
+    const summary = f.versionChanges!
+      .map(c => {
+        const [, mm, dd] = c.date.split('-');
+        const short = (mm && dd) ? `${parseInt(mm, 10)}/${parseInt(dd, 10)}: ` : '';
+        return `${short}${c.from} → ${c.to}`;
+      })
+      .join('; ');
+    lines.push(`Risk: Delayed (${summary})`);
+  } else if (f.riskLevel) {
+    lines.push(`Risk: ${f.riskLevel === 'red' ? 'High' : f.riskLevel === 'yellow' ? 'Medium' : 'Low'}`);
+  }
   if (f.riskNotes?.length) lines.push(`Risk Notes: ${f.riskNotes.join(', ')}`);
   if (f.owner)           lines.push(`Owner: ${withEmail(f.owner)}`);
   if (f.pmOwner)         lines.push(`PM: ${withEmail(f.pmOwner)}`);

@@ -417,7 +417,11 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
             const parts = [f.name];
             if (f.priority) parts.push(`[${f.priority}]`);
             if (f.iosVersion) parts.push(`v${f.iosVersion}`);
-            if (f.riskLevel) parts.push(`risk:${f.riskLevel === 'red' ? 'high' : f.riskLevel === 'yellow' ? 'medium' : 'low'}`);
+            // Delayed (versionChanges non-empty) takes precedence over
+            // riskLevel — Hamlet suppresses riskLevel for AB Testing
+            // but keeps versionChanges populated.
+            if ((f.versionChanges?.length ?? 0) > 0) parts.push('risk:delayed');
+            else if (f.riskLevel) parts.push(`risk:${f.riskLevel === 'red' ? 'high' : f.riskLevel === 'yellow' ? 'medium' : 'low'}`);
             if (f.techOwner) parts.push(`tech:${f.techOwner}`);
             lines.push(`  - ${parts.join(' | ')}`);
           }
