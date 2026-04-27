@@ -63,6 +63,8 @@ export interface HamletFeature {
   lastUpdated?: string;
   chatId?: string;
   pocEmails?: Record<string, string>;  // name → email for @mentions
+  meegoIssueId?: string;
+  manualEdits?: string[];
 }
 
 interface FeatureCache {
@@ -166,4 +168,47 @@ export function formatFeature(f: HamletFeature): string {
   if (f.businessLine)    lines.push(`Business Line: ${f.businessLine}`);
   if (f.lastUpdated)     lines.push(`Last Updated: ${f.lastUpdated}`);
   return lines.join('\n');
+}
+
+/**
+ * Update a single feature's link in the Hamlet GCS cache and add the field
+ * to manualEdits[] so it's protected from sync overwrites. Uses GCS optimistic
+ * concurrency (if-match generation header) to avoid races.
+ */
+export async function updateFeatureLink(
+  featureId: string,
+  field: 'figmaUrl' | 'libraUrl' | 'abReportUrl',
+  url: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const token = await getMetadataToken();
+  // Read current cache + generation
+  const readUrl = `https://storage.googleapis.com/storage/v1/b/${STATE_BUCKET}/o/${encodeURIComponent(FEATURES_PATH)}?alt=media`;
+  const readRes = await fetch(readUrl, { headers: { Authorization: `Bearer ${token}` } });
+  if (!readRes.ok) return { ok: false, error: `GCS read failed: ${readRes.status}` };
+  const generation = readRes.headers.get('x-goog-generation') ?? '';
+  const cache = await readRes.json() as FeatureCache;
+
+  const idx = cache.features.findIndex(f => f.id === featureId || f.meegoIssueId === featureId);
+  if (idx === -1) return { ok: false, error: 'feature not found in cache' };
+
+  const feat = cache.features[idx];
+  const manualEdits = new Set(feat.manualEdits ?? []);
+  manualEdits.add(field);
+  cache.features[idx] = { ...feat, [field]: url, manualEdits: [...manualEdits] };
+  cache.updatedAt = new Date().toISOString();
+
+  // Write with generation precondition
+  const writeUrl = `https://storage.googleapis.com/upload/storage/v1/b/${STATE_BUCKET}/o?uploadType=media&name=${encodeURIComponent(FEATURES_PATH)}${generation ? `&ifGenerationMatch=${generation}` : ''}`;
+  const writeRes = await fetch(writeUrl, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(cache),
+  });
+  if (!writeRes.ok) {
+    const text = await writeRes.text();
+    return { ok: false, error: `GCS write failed: ${writeRes.status} ${text.slice(0, 200)}` };
+  }
+  // Invalidate in-memory cache so next read gets the fresh data
+  memCache = null;
+  return { ok: true };
 }

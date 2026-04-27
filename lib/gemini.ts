@@ -2,7 +2,7 @@ import { GoogleGenAI, Type, FunctionCallingConfigMode, FunctionDeclaration } fro
 import { ChatMessage } from './types';
 import * as meego from './meego';
 import * as lark from './lark';
-import { loadHamletFeatures, findFeature, formatFeature } from './hamlet-cache';
+import { loadHamletFeatures, findFeature, formatFeature, updateFeatureLink } from './hamlet-cache';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 const MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash-lite';
@@ -236,6 +236,19 @@ const tools: FunctionDeclaration[] = [
     parameters: { type: Type.OBJECT, properties: {} },
   },
   {
+    name: 'set_feature_link',
+    description: 'Set or update the Figma, Libra, or AB Report link on a feature in Hamlet. Use when the user says things like "update the figma link for feature X with ...", "add this ab report link for feature Y ...", "set libra for this feature to ...". The link is saved and protected from sync overwrites.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        feature_query: { type: Type.STRING, description: 'Feature name keyword(s) to find the feature in Hamlet (e.g. "ai self mix studio"). If the user said "this feature" and you have CURRENT FEATURE CONTEXT, use that feature\'s name.' },
+        link_type: { type: Type.STRING, description: 'One of: figma, libra, ab' },
+        url: { type: Type.STRING, description: 'The full URL to save' },
+      },
+      required: ['feature_query', 'link_type', 'url'],
+    },
+  },
+  {
     name: 'whoami',
     description: 'Get the current user\'s Lark identity info (open_id, name). Use when the user asks "who am I", "what\'s my open id", or similar.',
     parameters: { type: Type.OBJECT, properties: {} },
@@ -428,6 +441,25 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
           lines.push('');
         }
         return lines.join('\n');
+      }
+
+      case 'set_feature_link': {
+        const linkType = String(args.link_type ?? '').toLowerCase();
+        const fieldMap: Record<string, 'figmaUrl' | 'libraUrl' | 'abReportUrl'> = {
+          figma: 'figmaUrl', libra: 'libraUrl', ab: 'abReportUrl',
+          'ab report': 'abReportUrl', 'abreport': 'abReportUrl',
+        };
+        const field = fieldMap[linkType];
+        if (!field) return `Invalid link_type "${args.link_type}". Use figma, libra, or ab.`;
+        const url = String(args.url ?? '').trim();
+        if (!url) return 'URL is required.';
+        const features = await loadHamletFeatures();
+        const match = findFeature(features, args.feature_query as string);
+        if (!match) return `No feature found matching "${args.feature_query}".`;
+        const result = await updateFeatureLink(match.id, field, url);
+        if (!result.ok) return `Failed to update link: ${result.error}`;
+        const linkLabel = field === 'figmaUrl' ? 'Figma' : field === 'libraUrl' ? 'Libra' : 'AB Report';
+        return `Saved ${linkLabel} link for "${match.name}". It's protected from sync overwrites.`;
       }
 
       case 'whoami':
