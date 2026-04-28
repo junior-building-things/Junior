@@ -116,26 +116,24 @@ async function resolveDocId(url: string, token: string): Promise<string> {
 }
 
 /**
- * Reply to a Lark drive doc comment thread, mentioning the original
- * commenter. Mention is rendered via a `mention_user` element keyed
- * on the asker's open_id (Lark's docx comments API mislabels its
- * identifier field `user_id` but accepts open_id values there).
+ * Reply to a Lark drive doc comment thread.
+ *
+ * The reply lands on the asker's own comment thread, so Lark notifies
+ * them automatically — no explicit @mention element needed. Earlier
+ * attempt with `mention_user` failed validation (code=99992402); that
+ * element type appears in inbound parsing but isn't accepted by the
+ * create-reply endpoint.
  */
 async function sendPrdCommentReply(
   prdUrl: string,
   commentId: string,
-  askerOpenId: string,
+  _askerOpenId: string,
   replyText: string,
 ): Promise<boolean> {
   const token = await getLarkBotToken();
   const docId = await resolveDocId(prdUrl, token);
   if (!docId) return false;
-  const elements: Array<Record<string, unknown>> = [];
-  if (askerOpenId) {
-    elements.push({ type: 'mention_user', mention_user: { user_id: askerOpenId } });
-    elements.push({ type: 'text_run', text_run: { text: ' ' } });
-  }
-  elements.push({ type: 'text_run', text_run: { text: replyText } });
+  const elements = [{ type: 'text_run', text_run: { text: replyText } }];
   const res = await fetch(
     `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx`,
     {
