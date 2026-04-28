@@ -254,6 +254,8 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   priority: string;
   prd: string;
   meegoUrl: string;
+  /** Active workflow node names in Chinese (e.g. ['iOS 开发', 'Android 开发']). */
+  activeNodesCn: string[];
 }> {
   const meegoUrl = `https://meego.larkoffice.com/${projectKey}/story/detail/${workItemId}`;
   const raw = await callMeegoMcp('get_workitem_brief', {
@@ -264,8 +266,9 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   const name = parseWorkItemField(raw, '工作项名称') || `Feature ${workItemId}`;
   const prd = parseWorkItemField(raw, 'PRD') || '';
   const priorityRaw = parseWorkItemField(raw, '优先级') || 'P2';
+  const activeNodesCn = parseActiveNodes(raw).map(n => n.name).filter(Boolean);
 
-  return { name, priority: priorityRaw, prd, meegoUrl };
+  return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn };
 }
 
 /** Structured version of getMyFeatures for internal use */
