@@ -48,7 +48,6 @@ export async function POST(req: NextRequest) {
   try {
     const brief = await getFeatureBrief(project, id);
     const isPastPrep = brief.activeNodesCn.some(n => POST_REQ_PREP_NODES.has(n));
-    console.log(`[check-prd-ready] ${project}/${id}: activeNodesCn=${JSON.stringify(brief.activeNodesCn)} isPastPrep=${isPastPrep}`);
 
     if (!isPastPrep) {
       return NextResponse.json({ ok: true, sent: false, reason: 'not past Requirements Prep', activeNodesCn: brief.activeNodesCn });

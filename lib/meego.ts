@@ -303,7 +303,6 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   // Normalize priority: JSON returns '0'..'3', markdown returns 'P0'..'P3'.
   if (/^[0-3]$/.test(priorityRaw)) priorityRaw = `P${priorityRaw}`;
   if (!priorityRaw) priorityRaw = 'P2';
-
   return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn };
 }
 
