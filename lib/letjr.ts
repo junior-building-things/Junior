@@ -118,31 +118,44 @@ async function resolveDocId(url: string, token: string): Promise<string> {
 /**
  * Reply to a Lark drive doc comment thread.
  *
- * The reply lands on the asker's own comment thread, so Lark notifies
- * them automatically — no explicit @mention element needed. Earlier
- * attempt with `mention_user` failed validation (code=99992402); that
- * element type appears in inbound parsing but isn't accepted by the
- * create-reply endpoint.
+ * Tries to render an @mention of the asker first (so the reply
+ * actually pings them), and falls back to plain text if Lark rejects
+ * the mention element. The earlier 99992402 failure was probably from
+ * the missing `user_id_type=open_id` query param — Lark needs to know
+ * what flavor of id we're passing.
  */
 async function sendPrdCommentReply(
   prdUrl: string,
   commentId: string,
-  _askerOpenId: string,
+  askerOpenId: string,
   replyText: string,
 ): Promise<boolean> {
   const token = await getLarkBotToken();
   const docId = await resolveDocId(prdUrl, token);
   if (!docId) return false;
-  const elements = [{ type: 'text_run', text_run: { text: replyText } }];
-  const res = await fetch(
-    `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx`,
-    {
+
+  const post = async (elements: Array<Record<string, unknown>>, withUserIdType: boolean) => {
+    const url = `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx${withUserIdType ? '&user_id_type=open_id' : ''}`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: { elements } }),
-    },
-  );
-  const data = await res.json() as { code: number; msg?: string };
+    });
+    return await res.json() as { code: number; msg?: string };
+  };
+
+  if (askerOpenId) {
+    const withMention = [
+      { type: 'mention_user', mention_user: { user_id: askerOpenId } },
+      { type: 'text_run', text_run: { text: ` ${replyText}` } },
+    ];
+    const data = await post(withMention, true);
+    if (data.code === 0) return true;
+    console.warn(`[letjr] PRD comment reply with mention failed: code=${data.code} msg=${data.msg} — falling back to plain text`);
+  }
+
+  const plain = [{ type: 'text_run', text_run: { text: replyText } }];
+  const data = await post(plain, false);
   if (data.code !== 0) {
     console.warn(`[letjr] PRD comment reply failed: code=${data.code} msg=${data.msg}`);
     return false;
