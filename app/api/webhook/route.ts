@@ -177,7 +177,7 @@ export async function POST(req: Request) {
   }
 
   // Save messages (skip failed responses to avoid polluting history)
-  if (reply && reply !== 'No response generated.') {
+  if (reply && reply !== 'Sorry, can you try asking that again?') {
     history.push({ role: 'user', content: userText });
     history.push({ role: 'model', content: reply });
     await saveMessages(chatId, history);

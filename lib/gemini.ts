@@ -572,7 +572,7 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
   const abort = AbortSignal.timeout(CHAT_TIMEOUT_MS);
 
   // Filter out corrupted history pairs from previous failures
-  const ERROR_PATTERNS = ['No response generated.', "couldn't retrieve", "don't have the necessary permissions", 'encountered an error', 'showing as'];
+  const ERROR_PATTERNS = ['No response generated.', 'Sorry, can you try asking that again?', "couldn't retrieve", "don't have the necessary permissions", 'encountered an error', 'showing as'];
   const cleanHistory: ChatMessage[] = [];
   for (let i = 0; i < history.length; i++) {
     const m = history[i];
@@ -629,8 +629,8 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
 
     let response = await chatSession.sendMessage({ message: userMessage });
 
-    // Handle multi-turn function calling (up to 5 rounds)
-    for (let i = 0; i < 5; i++) {
+    // Handle multi-turn function calling (up to 10 rounds)
+    for (let i = 0; i < 10; i++) {
       if (abort.aborted) throw new DOMException('Timed out', 'TimeoutError');
 
       const parts = response.candidates?.[0]?.content?.parts ?? [];
@@ -658,7 +658,16 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
 
     // Strip all italic markers while preserving bold (**text**)
     // 1. Shelter bold markers  2. Remove remaining *  3. Restore bold
-    const text = response.text ?? 'No response generated.';
+    let text = response.text;
+    if (!text) {
+      const cand = response.candidates?.[0];
+      const finishReason = cand?.finishReason ?? 'UNKNOWN';
+      const partKinds = (cand?.content?.parts ?? []).map(p =>
+        p.functionCall ? `fn:${p.functionCall.name}` : p.text ? 'text' : 'other'
+      );
+      console.warn(`[gemini] empty response.text — finishReason=${finishReason} parts=${JSON.stringify(partKinds)}`);
+      text = 'Sorry, can you try asking that again?';
+    }
     return text.replace(/\*\*/g, '\x00').replace(/\*/g, '').replace(/\x00/g, '**');
   } catch (err) {
     if (err instanceof DOMException && err.name === 'TimeoutError') {
