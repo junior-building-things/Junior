@@ -268,6 +268,14 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   const priorityRaw = parseWorkItemField(raw, '优先级') || 'P2';
   const activeNodesCn = parseActiveNodes(raw).map(n => n.name).filter(Boolean);
 
+  // Debug: if we couldn't parse any active nodes, dump a slice of the raw
+  // response so we can see what format Meego MCP actually returned.
+  if (activeNodesCn.length === 0) {
+    const sectionIdx = raw.indexOf('进行中的节点');
+    const slice = sectionIdx >= 0 ? raw.slice(sectionIdx, sectionIdx + 800) : raw.slice(0, 800);
+    console.log(`[getFeatureBrief] ${workItemId}: no active nodes parsed. Section/preview: ${slice}`);
+  }
+
   return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn };
 }
 
