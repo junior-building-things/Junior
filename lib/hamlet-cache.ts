@@ -65,6 +65,8 @@ export interface HamletFeature {
   pocEmails?: Record<string, string>;  // name → email for @mentions
   meegoIssueId?: string;
   manualEdits?: string[];
+  /** Latest page of comments on the Meego ticket itself. Synced by Hamlet. */
+  meegoComments?: Array<{ author: string; content: string; createdAt: string }>;
 }
 
 interface FeatureCache {
@@ -167,6 +169,17 @@ export function formatFeature(f: HamletFeature): string {
   if (f.libraUrl)        lines.push(`Libra: ${f.libraUrl}`);
   if (f.businessLine)    lines.push(`Business Line: ${f.businessLine}`);
   if (f.lastUpdated)     lines.push(`Last Updated: ${f.lastUpdated}`);
+  if (f.meegoComments?.length) {
+    lines.push('');
+    lines.push(`Meego Comments (latest ${f.meegoComments.length}):`);
+    for (const c of f.meegoComments) {
+      const date = c.createdAt ? `${c.createdAt} ` : '';
+      const who = c.author ? `${c.author}: ` : '';
+      // Cap each comment to ~280 chars to avoid bloating the prompt.
+      const body = c.content.length > 280 ? `${c.content.slice(0, 280)}…` : c.content;
+      lines.push(`  - ${date}${who}${body}`);
+    }
+  }
   return lines.join('\n');
 }
 
