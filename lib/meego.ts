@@ -263,18 +263,46 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
     fields: ['wiki', 'priority'],
   });
 
-  const name = parseWorkItemField(raw, '工作项名称') || `Feature ${workItemId}`;
-  const prd = parseWorkItemField(raw, 'PRD') || '';
-  const priorityRaw = parseWorkItemField(raw, '优先级') || 'P2';
-  const activeNodesCn = parseActiveNodes(raw).map(n => n.name).filter(Boolean);
+  // Meego MCP now returns JSON; older deployments returned markdown. Try
+  // JSON first, then fall back to markdown parsing.
+  let name = '';
+  let prd = '';
+  let priorityRaw = '';
+  let activeNodesCn: string[] = [];
 
-  // Debug: if we couldn't parse any active nodes, dump a slice of the raw
-  // response so we can see what format Meego MCP actually returned.
-  if (activeNodesCn.length === 0) {
-    const sectionIdx = raw.indexOf('进行中的节点');
-    const slice = sectionIdx >= 0 ? raw.slice(sectionIdx, sectionIdx + 800) : raw.slice(0, 800);
-    console.log(`[getFeatureBrief] ${workItemId}: no active nodes parsed. Section/preview: ${slice}`);
+  try {
+    const briefJson = JSON.parse(raw) as {
+      work_item_attribute?: { work_item_name?: string };
+      work_item_fields?: Array<{ key?: string; value?: unknown }>;
+      work_item_current_node?: Array<{ name?: string }>;
+    };
+    name = briefJson.work_item_attribute?.work_item_name ?? '';
+    const getField = (key: string): string => {
+      const f = briefJson.work_item_fields?.find(fi => fi.key === key);
+      if (!f || f.value === undefined || f.value === null) return '';
+      if (typeof f.value === 'string') return f.value;
+      if (typeof f.value === 'object' && 'value' in (f.value as Record<string, unknown>)) {
+        return String((f.value as Record<string, unknown>).value ?? '');
+      }
+      return String(f.value);
+    };
+    prd = getField('wiki');
+    priorityRaw = getField('priority');
+    activeNodesCn = (briefJson.work_item_current_node ?? [])
+      .map(n => n.name ?? '')
+      .filter(Boolean);
+  } catch {
+    // Legacy markdown
+    name = parseWorkItemField(raw, '工作项名称');
+    prd = parseWorkItemField(raw, 'PRD');
+    priorityRaw = parseWorkItemField(raw, '优先级');
+    activeNodesCn = parseActiveNodes(raw).map(n => n.name).filter(Boolean);
   }
+
+  if (!name) name = `Feature ${workItemId}`;
+  // Normalize priority: JSON returns '0'..'3', markdown returns 'P0'..'P3'.
+  if (/^[0-3]$/.test(priorityRaw)) priorityRaw = `P${priorityRaw}`;
+  if (!priorityRaw) priorityRaw = 'P2';
 
   return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn };
 }
