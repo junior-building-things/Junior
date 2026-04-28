@@ -67,6 +67,45 @@ export async function POST(req: Request) {
 
   const header = (data.header ?? {}) as Record<string, unknown>;
   const eventType = header.event_type;
+
+  // Handle 👍 reactions on Hamlet's "Let Jr. Reply" proposal messages.
+  // When the owner thumbs-ups a draft, look up the pending entry in
+  // GCS, send the prepared reply to its destination (PRD comment or
+  // feature group chat), and clear the entry.
+  if (eventType === 'im.message.reaction.created_v1') {
+    const reactionEvent = (data.event ?? {}) as {
+      message_id?: string;
+      reaction_type?: { emoji_type?: string };
+      operator_type?: string;
+      user_id?: { open_id?: string };
+    };
+    const messageId = reactionEvent.message_id;
+    const emoji = reactionEvent.reaction_type?.emoji_type ?? '';
+    const reactor = reactionEvent.user_id?.open_id;
+    // Lark uses 'THUMBSUP' for 👍; some clients emit 'LIKE'. Accept both.
+    const isThumbsUp = emoji === 'THUMBSUP' || emoji === 'LIKE';
+    if (messageId && isThumbsUp) {
+      // Optional owner gate: if OWNER_OPEN_ID is set, only the owner
+      // can trigger an auto-send.
+      const ownerOpenId = process.env.OWNER_OPEN_ID;
+      if (ownerOpenId && reactor !== ownerOpenId) {
+        console.log(`[letjr] ignoring 👍 from ${reactor} (not owner)`);
+        return new Response('', { status: 200 });
+      }
+      try {
+        const { consumePendingReply, sendPending } = await import('@/lib/letjr');
+        const entry = await consumePendingReply(messageId);
+        if (entry) {
+          const ok = await sendPending(entry);
+          console.log(`[letjr] reaction-triggered send for msg=${messageId} → ${ok ? 'OK' : 'FAILED'}`);
+        }
+      } catch (e) {
+        console.warn('[letjr] reaction handler error:', e);
+      }
+    }
+    return new Response('', { status: 200 });
+  }
+
   if (eventType && eventType !== 'im.message.receive_v1') {
     return new Response('', { status: 200 });
   }
