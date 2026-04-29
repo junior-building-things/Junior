@@ -144,39 +144,64 @@ async function sendPrdCommentReply(
     return await res.json() as { code: number; msg?: string };
   };
 
-  if (askerOpenId) {
-    // Drive-comment replies use the `person` element type (NOT
-    // mention_user — thats chat-message syntax, which Lark rejects
-    // here with code=99992402). Try person first; if validation
-    // still fails, fall back to plain text so the reply still lands.
-    const variants: Array<{ label: string; elements: Array<Record<string, unknown>>; withUserIdType: boolean }> = [
-      {
-        label: 'person',
-        elements: [
-          { type: 'person', person: { user_id: askerOpenId } },
-          { type: 'text_run', text_run: { text: ` ${replyText}` } },
-        ],
-        withUserIdType: true,
-      },
-    ];
-    for (const v of variants) {
-      const data = await post(v.elements, v.withUserIdType);
-      if (data.code === 0) {
-        console.log(`[letjr] PRD comment reply with ${v.label} mention OK`);
-        return true;
-      }
-      console.warn(`[letjr] PRD comment reply with ${v.label} mention failed: code=${data.code} msg=${data.msg}`);
-    }
-    console.warn('[letjr] PRD comment reply: all mention variants failed — falling back to plain text');
+  // Build the element list. The reply may contain inline
+  // <at user_id="ou_xxx"></at> tags (e.g. when Gemini punts to the PM
+  // with a real Lark mention). Drive-comment replies need those split
+  // into `person` elements interleaved with `text_run` elements.
+  const elements = buildCommentElements(askerOpenId, replyText);
+  // First attempt with user_id_type=open_id (mentions need it).
+  let data = await post(elements, true);
+  if (data.code === 0) {
+    console.log(`[letjr] PRD comment reply OK (${elements.length} elements)`);
+    return true;
   }
+  console.warn(`[letjr] PRD comment reply with mentions failed: code=${data.code} msg=${data.msg} — falling back to plain text`);
 
-  const plain = [{ type: 'text_run', text_run: { text: replyText } }];
-  const data = await post(plain, false);
+  const plain = [{ type: 'text_run', text_run: { text: stripAtTags(replyText) } }];
+  data = await post(plain, false);
   if (data.code !== 0) {
     console.warn(`[letjr] PRD comment reply failed: code=${data.code} msg=${data.msg}`);
     return false;
   }
   return true;
+}
+
+/**
+ * Build a Lark drive-comment elements list: a leading person mention
+ * for the asker (if known), then the reply body with any inline
+ * <at user_id="ou_xxx"></at> tags promoted to person elements.
+ */
+function buildCommentElements(askerOpenId: string, replyText: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  if (askerOpenId) {
+    out.push({ type: 'person', person: { user_id: askerOpenId } });
+    out.push({ type: 'text_run', text_run: { text: ' ' } });
+  }
+  // Split replyText on <at ...></at> tags (with optional inner text).
+  const re = /<at\s+user_id=(?:"|')([^"']+)(?:"|')\s*>(?:[^<]*)<\/at>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(replyText)) !== null) {
+    if (m.index > last) {
+      const chunk = replyText.slice(last, m.index);
+      if (chunk) out.push({ type: 'text_run', text_run: { text: chunk } });
+    }
+    out.push({ type: 'person', person: { user_id: m[1] } });
+    last = re.lastIndex;
+  }
+  if (last < replyText.length) {
+    out.push({ type: 'text_run', text_run: { text: replyText.slice(last) } });
+  }
+  if (out.length === 0) {
+    out.push({ type: 'text_run', text_run: { text: replyText } });
+  }
+  return out;
+}
+
+/** Remove all <at user_id=...></at> tags so plain-text fallback doesnt
+ *  expose raw markup to readers. */
+function stripAtTags(s: string): string {
+  return s.replace(/<at\s+user_id=(?:"|')([^"']+)(?:"|')\s*>(?:[^<]*)<\/at>/g, '@user');
 }
 
 /**
