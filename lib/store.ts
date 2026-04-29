@@ -172,12 +172,18 @@ export async function appendTurn(
 }
 
 /**
- * Wipe a single chat's history. Does NOT touch the user-level files —
- * if a user wants to wipe their cross-chat memory, that's a different
- * operation (not exposed yet).
+ * Wipe a single chat's history.
  */
 export async function clearChatHistory(chatId: string): Promise<void> {
   await saveHistoryFile(chatPath(chatId), []);
+}
+
+/**
+ * Wipe a single user's cross-chat history.
+ */
+export async function clearUserHistory(openId: string): Promise<void> {
+  if (!openId) return;
+  await saveHistoryFile(userPath(openId), []);
 }
 
 // ─── Back-compat exports (for callers not yet migrated) ─────────────────────

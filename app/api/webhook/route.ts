@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   }
 
   // Lazy-load heavy modules only for actual messages
-  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMergedHistory, appendTurn, clearChatHistory, recordEventOnce }, { chat }] = await Promise.all([
+  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMergedHistory, appendTurn, clearChatHistory, clearUserHistory, recordEventOnce }, { chat }] = await Promise.all([
     import('@/lib/lark'),
     import('@/lib/store'),
     import('@/lib/gemini'),
@@ -155,16 +155,21 @@ export async function POST(req: Request) {
     reactToMessage(messageId, 'OnIt').catch(() => {});
   }
 
-  // Handle reset command — clears the chat-level history only. User-
-  // level cross-chat memory is intentionally preserved (a chat reset
-  // shouldnt wipe what Junior remembers about you everywhere else).
-  // Accepts "reset" or "/reset" (any leading slashes stripped).
+  // Handle reset command — clears BOTH the chat-level history and the
+  // sender's cross-chat user history. Accepts "reset" or "/reset"
+  // (any leading slashes stripped).
   const resetCmd = userText.trim().toLowerCase().replace(/^\/+/, '');
   if (resetCmd === 'reset') {
-    await clearChatHistory(chatId);
+    await Promise.all([
+      clearChatHistory(chatId),
+      senderOpenId ? clearUserHistory(senderOpenId) : Promise.resolve(),
+    ]);
+    const msg = senderOpenId
+      ? 'Chat history and your personal cross-chat memory cleared.'
+      : 'Chat history cleared.';
     try {
-      if (messageId) await sendReply(messageId, 'Chat history cleared.', senderOpenId, senderName);
-      else await sendMessage(chatId, 'Chat history cleared.');
+      if (messageId) await sendReply(messageId, msg, senderOpenId, senderName);
+      else await sendMessage(chatId, msg);
     } catch {}
     return new Response('', { status: 200 });
   }
