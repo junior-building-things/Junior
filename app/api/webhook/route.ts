@@ -121,6 +121,7 @@ export async function POST(req: Request) {
   const message = (event.message ?? {}) as Record<string, unknown>;
   const chatId = message.chat_id as string | undefined;
   const messageId = message.message_id as string | undefined;
+  const parentId = message.parent_id as string | undefined;
   const senderOpenId = (sender.sender_id as Record<string, unknown> | undefined)?.open_id as string | undefined;
   const senderName = (sender.sender_name ?? sender.name) as string | undefined;
 
@@ -177,6 +178,56 @@ export async function POST(req: Request) {
   const reactionIdPromise: Promise<string | null> = messageId
     ? reactToMessage(messageId, 'Typing')
     : Promise.resolve(null);
+
+  // Card-edit routing: if this is a reply to a Hamlet "Edit" prompt
+  // tracked in pendingCardEdits, treat the user text as the edit
+  // instruction instead of a normal chat message.
+  if (parentId) {
+    try {
+      const { readPendingCardEdit, readCardEditContext, editSectionWithGemini, applyEditViaHamlet } = await import('@/lib/card-edit');
+      const pending = await readPendingCardEdit(parentId);
+      if (pending) {
+        const ctx = await readCardEditContext(pending.cardMsgId);
+        const featureSnap = ctx?.features.find(f => f.workItemId === pending.featureWorkItemId);
+        const sendResult = async (text: string) => {
+          try {
+            if (messageId) await sendReply(messageId, text, senderOpenId, senderName);
+            else await sendMessage(chatId, text);
+          } catch {}
+        };
+        const cleanupReaction = () => {
+          if (messageId) {
+            reactionIdPromise
+              .then(rid => { if (rid) return removeReaction(messageId, rid); })
+              .catch(() => {});
+          }
+        };
+        if (!featureSnap) {
+          await sendResult(`Couldn't find the saved card snapshot for **${pending.featureName}**. The card may be too old (snapshots are kept for 30 days).`);
+          cleanupReaction();
+          return new Response('', { status: 200 });
+        }
+        const newMd = await editSectionWithGemini(pending.featureName, featureSnap.cardContent, userText);
+        if (!newMd) {
+          await sendResult("Sorry, I couldn't apply that edit (Gemini failure). Try rewording?");
+          cleanupReaction();
+          return new Response('', { status: 200 });
+        }
+        if (newMd.trim() === featureSnap.cardContent.trim()) {
+          await sendResult("Looks like nothing changed — was the instruction unclear? Try being more specific (e.g. \"update the first bullet of A/B Results to ...\").");
+          cleanupReaction();
+          return new Response('', { status: 200 });
+        }
+        const ok = await applyEditViaHamlet(pending.cardMsgId, pending.featureWorkItemId, newMd);
+        await sendResult(ok ? 'Updated ✅' : "Edit applied locally but Hamlet couldn't patch the card — check the Hamlet logs.");
+        cleanupReaction();
+        return new Response('', { status: 200 });
+      }
+    } catch (e) {
+      console.warn('[webhook] card-edit detection failed:', e);
+      // fall through to normal chat handling
+    }
+  }
 
   // Load merged history (chat-level + this user's cross-chat history).
   const history = await loadMergedHistory(chatId, senderOpenId);
