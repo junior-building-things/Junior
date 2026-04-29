@@ -76,6 +76,119 @@ export interface FetchedReply {
 }
 
 /**
+ * Fetch the full text of a comment thread (every reply concatenated
+ * chronologically) so we can hand it to Junior as THREAD PARENT
+ * CONTEXT when generating an auto-reply. Best-effort; returns ''
+ * on any error.
+ */
+export async function fetchCommentThread(docId: string, commentId: string): Promise<string> {
+  if (!docId || !commentId) return '';
+  try {
+    const token = await getLarkBotToken();
+    const res = await fetch(
+      `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx&user_id_type=open_id`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json() as {
+      code: number;
+      data?: { items?: Array<{
+        user_id?: string;
+        create_time?: number;
+        content?: { elements?: Array<{
+          type?: string;
+          text_run?: { text?: string };
+          person?: { user_id?: string };
+        }> };
+      }> };
+    };
+    if (data.code !== 0) return '';
+    const lines: string[] = [];
+    for (const r of data.data?.items ?? []) {
+      let text = '';
+      for (const el of r.content?.elements ?? []) {
+        if (el.type === 'text_run') text += el.text_run?.text ?? '';
+        else if (el.type === 'person' && el.person?.user_id) text += `@${el.person.user_id}`;
+      }
+      const t = text.trim();
+      if (t) lines.push(`[${r.user_id ?? '?'}]: ${t}`);
+    }
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Post a PRD comment reply directly (no proposal step). Mirrors
+ * lib/letjr.ts's sendPrdCommentReply (asker @-tag via `person`,
+ * inline at-tags parsed from the reply text). Used by the drive
+ * comment auto-reply path in webhook/route.ts.
+ */
+export async function sendPrdCommentReplyExternal(
+  prdUrl: string,
+  commentId: string,
+  askerOpenId: string,
+  replyText: string,
+): Promise<boolean> {
+  if (!prdUrl || !commentId) return false;
+  const token = await getLarkBotToken();
+  const docId = await resolveDocId(prdUrl, token);
+  if (!docId) return false;
+  const elements = buildElements(askerOpenId, replyText);
+  const url = `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx&user_id_type=open_id`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: { elements } }),
+  });
+  const data = await res.json() as { code: number; msg?: string };
+  if (data.code !== 0) {
+    console.warn(`[letjr-followup] PRD comment reply failed: code=${data.code} msg=${data.msg}`);
+    return false;
+  }
+  return true;
+}
+
+async function resolveDocId(url: string, token: string): Promise<string> {
+  const wikiMatch = url.match(/\/wiki\/([A-Za-z0-9]+)/);
+  if (wikiMatch) {
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/wiki/v2/spaces/get_node?token=${wikiMatch[1]}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json() as { data?: { node?: { obj_token?: string } } };
+    return data.data?.node?.obj_token ?? '';
+  }
+  const docxMatch = url.match(/\/docx\/([A-Za-z0-9]+)/);
+  return docxMatch?.[1] ?? '';
+}
+
+function buildElements(askerOpenId: string, replyText: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  if (askerOpenId) {
+    out.push({ type: 'person', person: { user_id: askerOpenId } });
+    out.push({ type: 'text_run', text_run: { text: ' ' } });
+  }
+  const re = /<at\s+user_id=(?:"|')([^"']+)(?:"|')\s*>(?:[^<]*)<\/at>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(replyText)) !== null) {
+    if (m.index > last) {
+      const chunk = replyText.slice(last, m.index);
+      if (chunk) out.push({ type: 'text_run', text_run: { text: chunk } });
+    }
+    out.push({ type: 'person', person: { user_id: m[1] } });
+    last = re.lastIndex;
+  }
+  if (last < replyText.length) {
+    out.push({ type: 'text_run', text_run: { text: replyText.slice(last) } });
+  }
+  if (out.length === 0) {
+    out.push({ type: 'text_run', text_run: { text: replyText } });
+  }
+  return out;
+}
+
+/**
  * Fetch a single reply within a comment thread from Lark drive
  * comments API and return its decoded text + mentioned open_ids.
  * Returns null on any error.

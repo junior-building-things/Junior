@@ -151,26 +151,41 @@ export async function POST(req: Request) {
         console.log(`[drive-comment] skip: bot not mentioned in reply (mentions=${reply.mentionedOpenIds.join(',')})`);
         return new Response('', { status: 200 });
       }
-      // Trigger Hamlet's letjr-draft flow.
-      const HAMLET_URL = process.env.HAMLET_BASE_URL ?? 'https://hamlet-416594255546.asia-southeast1.run.app';
-      const SECRET = process.env.HAMLET_AGENT_RUN_SECRET ?? process.env.AGENT_RUN_SECRET ?? '';
-      const res = await fetch(`${HAMLET_URL}/api/admin/letjr-draft`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(SECRET ? { Authorization: `Bearer ${SECRET}` } : {}),
-        },
-        body: JSON.stringify({
-          featureName: thread.featureName ?? '(unknown feature)',
+      // Run Junior's general chat flow with the new reply as user
+      // input. Uses a synthetic chatId so per-thread chat history
+      // works; passes prdUrl so feature context resolves; passes the
+      // full thread above as parentMessageContent so Junior knows
+      // what's been discussed.
+      const synthChatId = `prd:${docId}:${commentId}`;
+      const { fetchCommentThread } = await import('@/lib/letjr-followup');
+      const threadContext = await fetchCommentThread(docId, commentId);
+      const { loadMergedHistory, appendTurn } = await import('@/lib/store');
+      const { chat } = await import('@/lib/gemini');
+      const history = await loadMergedHistory(synthChatId, fromOpenId);
+      let replyText: string;
+      try {
+        replyText = await chat(history, reply.text, {
+          senderOpenId: fromOpenId,
+          chatId: synthChatId,
           prdUrl: thread.prdUrl,
-          commentId,
-          askerOpenId: fromOpenId,
-          questionText: reply.text,
-          questionSource: 'prd_comment',
-        }),
-      });
-      const body = await res.text().catch(() => '');
-      console.log(`[drive-comment] letjr-draft → HTTP ${res.status} ${body.slice(0, 200)}`);
+          parentMessageContent: threadContext,
+        });
+      } catch (err) {
+        console.error('[drive-comment] gemini error:', err);
+        return new Response('', { status: 200 });
+      }
+      if (!replyText || replyText.startsWith('Sorry,')) {
+        console.log(`[drive-comment] skip send: bad reply (${replyText?.slice(0, 60)})`);
+        return new Response('', { status: 200 });
+      }
+      // Persist the turn so future Junior turns in the same PRD thread
+      // see what was said.
+      try { await appendTurn(synthChatId, fromOpenId, reply.text, replyText); } catch {}
+      // Send as a PRD comment reply (with the asker as @-mention via
+      // the existing `person` element machinery in letjr.ts).
+      const { sendPrdCommentReplyExternal } = await import('@/lib/letjr-followup');
+      const ok = await sendPrdCommentReplyExternal(thread.prdUrl, commentId, fromOpenId, replyText);
+      console.log(`[drive-comment] PRD comment reply ${ok ? 'OK' : 'FAILED'} for thread ${docId}:${commentId}`);
     } catch (e) {
       console.warn('[drive-comment] handler error:', e);
     }

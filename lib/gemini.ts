@@ -286,6 +286,10 @@ interface ChatContext {
    *  thread (if any). Lets Junior know what "this" / "that" refers to
    *  when colleagues thread-reply on a Junior-sent post or card. */
   parentMessageContent?: string;
+  /** When set (e.g. PRD comment auto-reply path), feature context is
+   *  resolved by matching this URL against Hamlets feature.prd field
+   *  rather than by chatId. */
+  prdUrl?: string;
 }
 
 async function executeTool(name: string, args: Record<string, unknown>, ctx: ChatContext = {}): Promise<string> {
@@ -619,12 +623,18 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
   // We prepend that feature's data to the system prompt so questions like
   // "what's the figma for this feature" work without naming the feature.
   let chatFeatureContext = '';
-  if (ctx.chatId) {
+  if (ctx.chatId || ctx.prdUrl) {
     try {
       const features = await loadHamletFeatures();
-      const match = features.find(f => f.chatId === ctx.chatId);
+      const match = features.find(f =>
+        (ctx.chatId && f.chatId === ctx.chatId) ||
+        (ctx.prdUrl && f.prd === ctx.prdUrl),
+      );
       if (match) {
-        chatFeatureContext = `\n\nCURRENT FEATURE CONTEXT (the user is asking from this feature's group chat):\n${formatFeature(match)}\n\nWhen the user says "this feature", "the feature", or asks about something without naming a feature, assume they mean THIS feature. Use the data above directly to answer — no need to call get_hamlet_feature.`;
+        const sourceLabel = ctx.prdUrl
+          ? "this feature's PRD comment thread"
+          : "this feature's group chat";
+        chatFeatureContext = `\n\nCURRENT FEATURE CONTEXT (the user is asking from ${sourceLabel}):\n${formatFeature(match)}\n\nWhen the user says "this feature", "the feature", or asks about something without naming a feature, assume they mean THIS feature. Use the data above directly to answer — no need to call get_hamlet_feature.`;
       }
     } catch (e) {
       console.warn('[gemini] failed to resolve chat feature context:', e);
