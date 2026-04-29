@@ -172,6 +172,7 @@ export async function POST(req: Request) {
           chatId: synthChatId,
           prdUrl: thread.prdUrl,
           parentMessageContent: threadContext,
+          replyChannel: 'prd_comment',
         });
       } catch (err) {
         console.error('[drive-comment] gemini error:', err);
