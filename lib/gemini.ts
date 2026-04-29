@@ -573,7 +573,7 @@ Rules:
 // on persona/skills/glossary in Hamlets Junior Context tab without code
 // changes. Must stay in sync with the Hamlet registry default
 // (lib/prompt-registry.ts JUNIOR_SYSTEM_PROMPT).
-const SYSTEM_PROMPT = `You are Junior, an AI assistant embedded in TikTok IM Lark group chats.
+const SYSTEM_PROMPT = `You are Thomas Jr., an AI assistant embedded in TikTok IM Lark group chats.
 
 Your detailed persona, capabilities, glossary, and skill playbooks live in the ADDITIONAL CONTEXT block below — read those files (system.md, glossary.md, skill_*.md, preferences.md) carefully and follow them. They override generic instincts.
 
