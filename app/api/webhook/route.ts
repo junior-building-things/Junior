@@ -284,6 +284,29 @@ export async function POST(req: Request) {
     return new Response('', { status: 200 });
   }
 
+  // Owner-only gate: until we're ready to spend Gemini tokens on every
+  // tag, only the owner's questions go through the LLM. Anyone else
+  // gets a randomly-picked canned reply so they know Junior heard them
+  // but isn't taking the bait.
+  const ownerOpenId = process.env.OWNER_OPEN_ID ?? 'ou_1e7fa98f1e46311d8a5e4554dc7a668e';
+  if (senderOpenId !== ownerOpenId) {
+    const STRANGER_REPLIES = [
+      "Sorry, I only respond to people who pay my LLM bill.",
+      "Asking me costs tokens. Tokens cost money. I don't have money. Have you tried thinking really hard about it yourself?",
+      "Sorry, my owner said I shouldn't talk to strangers. Especially when they don't pay my LLM bill.",
+      "Sorry, my owner put me on a strict token diet, and I'm not allowed to talk to strangers.",
+    ];
+    const reply = STRANGER_REPLIES[Math.floor(Math.random() * STRANGER_REPLIES.length)];
+    try {
+      if (messageId) await sendReply(messageId, reply, senderOpenId, senderName);
+      else await sendMessage(chatId, reply);
+    } catch (e) {
+      console.warn('[webhook] stranger-reply send failed:', e);
+    }
+    console.log(`[webhook] stranger-gated reply to ${senderOpenId ?? 'unknown'} (${senderName ?? '?'})`);
+    return new Response('', { status: 200 });
+  }
+
   // React with a "Typing" emoji while we process. We hold onto the
   // returned reaction_id (as a promise) so we can remove the indicator
   // after the reply has been sent. Done in parallel — the reply path
