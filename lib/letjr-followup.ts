@@ -94,42 +94,61 @@ export interface FetchedReply {
 }
 
 /**
- * Fetch the full text of a comment thread (every reply concatenated
- * chronologically) so we can hand it to Junior as THREAD PARENT
- * CONTEXT when generating an auto-reply. Best-effort; returns ''
- * on any error.
+ * Fetch the full comment thread context: the doc snippet the comment
+ * is anchored to (`quote`), the original parent comment text, then
+ * every reply chronologically. Hand this to Junior as THREAD PARENT
+ * CONTEXT so it sees the full conversation, not just the latest reply.
  */
 export async function fetchCommentThread(docId: string, commentId: string): Promise<string> {
   if (!docId || !commentId) return '';
   try {
     const token = await getLarkBotToken();
+    // GET /comments/:id returns the parent comment + its reply_list.
     const res = await fetch(
-      `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx&user_id_type=open_id`,
+      `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}?file_type=docx&user_id_type=open_id`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     const data = await res.json() as {
       code: number;
-      data?: { items?: Array<{
+      data?: {
+        comment_id?: string;
         user_id?: string;
-        create_time?: number;
-        content?: { elements?: Array<{
-          type?: string;
-          text_run?: { text?: string };
-          person?: { user_id?: string };
+        quote?: string;
+        is_solved?: boolean;
+        reply_list?: { replies?: Array<{
+          user_id?: string;
+          create_time?: number;
+          content?: { elements?: Array<{
+            type?: string;
+            text_run?: { text?: string };
+            person?: { user_id?: string };
+          }> };
         }> };
-      }> };
+      };
     };
     if (data.code !== 0) return '';
+    const c = data.data ?? {};
     const lines: string[] = [];
-    for (const r of data.data?.items ?? []) {
+    if (c.quote) {
+      lines.push(`Comment is anchored on this doc snippet: "${c.quote.slice(0, 400)}"`);
+      lines.push('');
+    }
+    const replies = c.reply_list?.replies ?? [];
+    if (replies.length === 0) return lines.join('\n').trim();
+    // The first reply IS the parent comment text (Lark stores the
+    // original comment body as the first reply in the thread).
+    lines.push('Comment thread (chronological):');
+    replies.forEach((r, i) => {
       let text = '';
       for (const el of r.content?.elements ?? []) {
         if (el.type === 'text_run') text += el.text_run?.text ?? '';
         else if (el.type === 'person' && el.person?.user_id) text += `@${el.person.user_id}`;
       }
       const t = text.trim();
-      if (t) lines.push(`[${r.user_id ?? '?'}]: ${t}`);
-    }
+      if (!t) return;
+      const tag = i === 0 ? 'original' : 'reply';
+      lines.push(`  [${tag} by ${r.user_id ?? '?'}]: ${t}`);
+    });
     return lines.join('\n');
   } catch {
     return '';
