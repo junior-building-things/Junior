@@ -50,9 +50,37 @@ interface JuniorCommentThread {
   lastJuniorReplyAtIso: string;
 }
 
+interface PostFeatureMapping {
+  workItemId: string;
+  featureName: string;
+  prdUrl: string;
+  sentAtIso: string;
+}
+
 interface DigestState {
   juniorCommentThreads?: Record<string, JuniorCommentThread>;
+  postFeatureMap?: Record<string, PostFeatureMapping>;
   [k: string]: unknown;
+}
+
+/**
+ * Look up a Lark post message_id (sent by Hamlet via Send-to-PM-Group)
+ * in the shared state.postFeatureMap. Returns the originating feature
+ * info or null. Used to inject prdUrl into chat() ctx so feature
+ * context auto-resolves in PM-group thread replies.
+ */
+export async function readPostFeatureMapping(msgId: string): Promise<PostFeatureMapping | null> {
+  if (!msgId) return null;
+  try {
+    const token = await getGcsToken();
+    const url = `https://storage.googleapis.com/storage/v1/b/${STATE_BUCKET}/o/${encodeURIComponent(STATE_PATH)}?alt=media`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const state = await res.json() as DigestState;
+    return state.postFeatureMap?.[msgId] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

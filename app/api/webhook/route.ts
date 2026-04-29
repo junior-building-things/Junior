@@ -358,9 +358,35 @@ export async function POST(req: Request) {
     }
   }
 
+  // If the parent message is one Hamlet sent via "Send to PM Group"
+  // (postFeatureMap entry), pass the originating feature's prdUrl to
+  // chat() so feature context auto-resolves even though the chat
+  // itself isn't a feature group chat.
+  let prdUrlFromPostMap = '';
+  if (parentId || rootId) {
+    try {
+      const { readPostFeatureMapping } = await import('@/lib/letjr-followup');
+      const mapping = (parentId && await readPostFeatureMapping(parentId))
+        ?? (rootId && await readPostFeatureMapping(rootId))
+        ?? null;
+      if (mapping) {
+        prdUrlFromPostMap = mapping.prdUrl;
+        console.log(`[webhook] postFeatureMap hit: feature="${mapping.featureName}" prdUrl=${mapping.prdUrl}`);
+      }
+    } catch (e) {
+      console.warn('[webhook] postFeatureMap lookup failed:', e);
+    }
+  }
+
   let reply: string;
   try {
-    reply = await chat(history, userText, { senderOpenId, senderName, chatId, parentMessageContent });
+    reply = await chat(history, userText, {
+      senderOpenId,
+      senderName,
+      chatId,
+      parentMessageContent,
+      prdUrl: prdUrlFromPostMap || undefined,
+    });
   } catch (err) {
     console.error('Gemini error:', err);
     reply = "Sorry, I hit an error processing that. Try again?";
