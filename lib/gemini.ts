@@ -294,6 +294,11 @@ interface ChatContext {
    *  Lark IM messages render lark_md (bold, links, etc.) but Lark
    *  drive comments are plain text — Markdown shows up literally. */
   replyChannel?: 'chat' | 'prd_comment';
+  /** Pre-formatted block of the last N messages in the chat (text
+   *  form, oldest -> newest). Surfaced as RECENT CHAT CONTEXT so
+   *  Junior catches activity it didnt directly participate in
+   *  (e.g. cards Hamlet posted, casual conversation between humans). */
+  recentChatContext?: string;
 }
 
 async function executeTool(name: string, args: Record<string, unknown>, ctx: ChatContext = {}): Promise<string> {
@@ -692,6 +697,17 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     threadParentContext = `\n\nTHREAD PARENT CONTEXT (the message the user is replying to in thread):\n${truncated}\n\nWhen the user says "this", "that", "the [section]", or asks about content without naming it, assume they mean the message above.`;
   }
 
+  // Recent chat context: a snapshot of the last N messages in the
+  // chat, regardless of whether Junior was tagged on them. Lets the
+  // model see cards Hamlet posted, casual back-and-forth, etc.
+  let recentChatContext = '';
+  if (ctx.recentChatContext && ctx.recentChatContext.trim()) {
+    const truncated = ctx.recentChatContext.length > 6000
+      ? ctx.recentChatContext.slice(-6000)
+      : ctx.recentChatContext;
+    recentChatContext = `\n\nRECENT CHAT CONTEXT (last few messages in this chat — for situational awareness; do NOT respond to these unless the user explicitly asks):\n${truncated}`;
+  }
+
   try {
     const { getPrompt, getPromptThinkingBudget, thinkingBudgetToConfig } = await import('./prompts');
     // Pick base prompt by channel: chat IM (lark_md) vs PRD comment
@@ -702,7 +718,7 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
       : 'junior.system_prompt';
     const fallback = ctx.replyChannel === 'prd_comment' ? COMMENT_SYSTEM_PROMPT : SYSTEM_PROMPT;
     const baseSystemPrompt = await getPrompt(promptId, fallback);
-    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext + threadParentContext;
+    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext + recentChatContext + threadParentContext;
     // Thinking budget is editable per-prompt from the Hamlet Prompts tab.
     // Defaults to 'dynamic' (model decides per round). CHAT_TIMEOUT_MS
     // (60s) is the safety net against runaway thinking on large prompts.

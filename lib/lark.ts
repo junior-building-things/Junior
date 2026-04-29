@@ -287,6 +287,69 @@ function decodeMessageBody(msgType: string, raw: string): string {
   }
 }
 
+/**
+ * Fetch the most recent N chat messages from a Lark chat, returned
+ * in chronological order (oldest -> newest). Used to build a RECENT
+ * CHAT CONTEXT block that Junior sees on every turn — covers
+ * scenarios where the bot was silent (not @-tagged) but recent chat
+ * activity is needed for "what's going on here?" questions.
+ */
+export interface RecentMessage {
+  msgId: string;
+  senderOpenId: string;
+  senderName: string;
+  ts: number;
+  text: string;
+}
+
+export async function fetchRecentChatMessages(
+  chatId: string,
+  count: number,
+  excludeMsgId?: string,
+): Promise<RecentMessage[]> {
+  if (!chatId) return [];
+  try {
+    const token = await getTenantToken();
+    const params = new URLSearchParams({
+      container_id_type: 'chat',
+      container_id: chatId,
+      sort_type: 'ByCreateTimeDesc',
+      page_size: String(Math.max(count + 1, 1)),
+    });
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json() as {
+      code: number;
+      data?: { items?: Array<{
+        message_id?: string;
+        msg_type?: string;
+        create_time?: string;
+        sender?: { id?: string; id_type?: string; sender_id?: { open_id?: string } };
+        body?: { content?: string };
+      }> };
+    };
+    if (data.code !== 0) return [];
+    const out: RecentMessage[] = [];
+    for (const m of data.data?.items ?? []) {
+      const id = m.message_id ?? '';
+      if (!id || id === excludeMsgId) continue;
+      const sender = m.sender ?? {};
+      const senderOpenId = sender.sender_id?.open_id
+        ?? (sender.id && (sender.id_type ?? 'open_id') === 'open_id' ? sender.id : '')
+        ?? '';
+      const ts = Number(m.create_time ?? '0');
+      const text = decodeMessageBody(m.msg_type ?? '', m.body?.content ?? '');
+      if (!text.trim()) continue;
+      out.push({ msgId: id, senderOpenId, senderName: '', ts, text });
+    }
+    out.sort((a, b) => a.ts - b.ts);
+    return out.slice(-count);
+  } catch {
+    return [];
+  }
+}
+
 export async function reactToMessage(messageId: string, emoji: string): Promise<string | null> {
   try {
     const token = await getTenantToken();

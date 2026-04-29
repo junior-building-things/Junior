@@ -378,6 +378,28 @@ export async function POST(req: Request) {
     }
   }
 
+  // Recent chat context: snapshot the last 15 messages in the chat so
+  // Junior sees activity it wasnt directly tagged on (cards Hamlet
+  // posted, casual back-and-forth, etc.). Best-effort.
+  let recentChatContext = '';
+  try {
+    const { fetchRecentChatMessages } = await import('@/lib/lark');
+    const recent = await fetchRecentChatMessages(chatId, 15, messageId);
+    if (recent.length > 0) {
+      const lines = recent.map(m => {
+        const who = m.senderOpenId
+          ? (m.senderOpenId === (process.env.LARK_BOT_OPEN_ID ?? '') ? 'Thomas Jr. (you)' : m.senderOpenId)
+          : 'unknown';
+        const t = m.text.length > 400 ? m.text.slice(0, 400) + '…' : m.text;
+        return `[${who}]: ${t}`;
+      });
+      recentChatContext = lines.join('\n');
+      console.log(`[webhook] recent chat context: ${recent.length} msgs (${recentChatContext.length} chars)`);
+    }
+  } catch (e) {
+    console.warn('[webhook] recent chat fetch failed:', e);
+  }
+
   let reply: string;
   try {
     reply = await chat(history, userText, {
@@ -386,6 +408,7 @@ export async function POST(req: Request) {
       chatId,
       parentMessageContent,
       prdUrl: prdUrlFromPostMap || undefined,
+      recentChatContext: recentChatContext || undefined,
     });
   } catch (err) {
     console.error('Gemini error:', err);
