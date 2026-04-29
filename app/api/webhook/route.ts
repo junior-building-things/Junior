@@ -133,6 +133,18 @@ export async function POST(req: Request) {
         console.log('[drive-comment] skip: from is bot (echo)');
         return new Response('', { status: 200 });
       }
+      // Dedup: Lark fires this event ONCE PER NOTIFICATION RECIPIENT,
+      // so a comment that @-tags @Junior + @Thomas produces two
+      // identical events (one with to_user_id=Thomas, one with
+      // to_user_id=Junior) — both pass the "bot mentioned" gate
+      // and would trigger duplicate auto-replies. Key on reply_id.
+      const dedupeKey = replyId
+        ? `drive-comment:${replyId}`
+        : `drive-comment:${docId}:${commentId}:${header.event_id ?? ''}`;
+      if (!(await recordEventOnce(dedupeKey))) {
+        console.log(`[drive-comment] skip: duplicate event (${dedupeKey})`);
+        return new Response('', { status: 200 });
+      }
       // Fetch the new reply, check it actually @-mentions Junior.
       const { fetchCommentReply, findFeatureByDocId } = await import('@/lib/letjr-followup');
       const reply = await fetchCommentReply(docId, commentId, replyId);
