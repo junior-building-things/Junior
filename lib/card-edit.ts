@@ -82,6 +82,21 @@ export async function readPendingCardEdit(promptMsgId: string): Promise<PendingC
   return state?.pendingCardEdits?.[promptMsgId] ?? null;
 }
 
+/**
+ * Find the most recent pending edit for a given card message_id.
+ * Useful when a user replies to the thread root (the card itself)
+ * rather than directly to the prompt — we still want to honour
+ * "the edit they just clicked" intent.
+ */
+export async function readPendingCardEditByCardMsgId(cardMsgId: string): Promise<PendingCardEdit | null> {
+  if (!cardMsgId) return null;
+  const state = await readDigestState();
+  const candidates = Object.values(state?.pendingCardEdits ?? {})
+    .filter(p => p.cardMsgId === cardMsgId)
+    .sort((a, b) => Date.parse(b.requestedAtIso) - Date.parse(a.requestedAtIso));
+  return candidates[0] ?? null;
+}
+
 export async function readCardEditContext(cardMsgId: string): Promise<CardEditContext | null> {
   if (!cardMsgId) return null;
   const state = await readDigestState();

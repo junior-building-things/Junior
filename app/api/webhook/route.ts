@@ -122,6 +122,7 @@ export async function POST(req: Request) {
   const chatId = message.chat_id as string | undefined;
   const messageId = message.message_id as string | undefined;
   const parentId = message.parent_id as string | undefined;
+  const rootId = message.root_id as string | undefined;
   const senderOpenId = (sender.sender_id as Record<string, unknown> | undefined)?.open_id as string | undefined;
   const senderName = (sender.sender_name ?? sender.name) as string | undefined;
 
@@ -179,13 +180,21 @@ export async function POST(req: Request) {
     ? reactToMessage(messageId, 'Typing')
     : Promise.resolve(null);
 
-  // Card-edit routing: if this is a reply to a Hamlet "Edit" prompt
-  // tracked in pendingCardEdits, treat the user text as the edit
-  // instruction instead of a normal chat message.
-  if (parentId) {
+  // Card-edit routing: if this is a reply in a thread on a tracked
+  // AB card (either a direct reply to the bot's "what would you like
+  // to change?" prompt OR a generic reply in the same thread), treat
+  // the user text as the edit instruction.
+  console.log(`[webhook] msg=${messageId} parent=${parentId ?? '(none)'} root=${rootId ?? '(none)'}`);
+  if (parentId || rootId) {
     try {
-      const { readPendingCardEdit, readCardEditContext, editSectionWithGemini, applyEditViaHamlet } = await import('@/lib/card-edit');
-      const pending = await readPendingCardEdit(parentId);
+      const { readPendingCardEdit, readPendingCardEditByCardMsgId, readCardEditContext, editSectionWithGemini, applyEditViaHamlet } = await import('@/lib/card-edit');
+      // Prefer parent_id match (direct reply to prompt). Fall back to
+      // root_id (the thread is anchored on the AB card itself, so the
+      // user might reply to the card rather than to the prompt).
+      let pending = parentId ? await readPendingCardEdit(parentId) : null;
+      if (!pending && rootId) pending = await readPendingCardEditByCardMsgId(rootId);
+      if (!pending && parentId) pending = await readPendingCardEditByCardMsgId(parentId);
+      console.log(`[webhook] pending edit lookup: ${pending ? `match (${pending.featureName})` : 'no match'}`);
       if (pending) {
         const ctx = await readCardEditContext(pending.cardMsgId);
         const featureSnap = ctx?.features.find(f => f.workItemId === pending.featureWorkItemId);
