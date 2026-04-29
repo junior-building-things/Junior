@@ -1,0 +1,130 @@
+/**
+ * Helpers for the real-time PRD comment follow-up flow.
+ *
+ * - readJuniorCommentThread: look up state.juniorCommentThreads
+ *   (saved in lib/letjr.ts after a successful PRD comment reply).
+ * - fetchCommentReply: call Lark drive comments API to retrieve a
+ *   specific reply's text + the open_ids it mentions, so the webhook
+ *   handler can decide whether Junior was tagged.
+ */
+
+const STATE_BUCKET = 'tiktok-im-hamlet-state';
+const STATE_PATH = 'digests/chat-risks.json';
+const METADATA_TOKEN_URL =
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+const LARK_BASE_URL = 'https://open.larksuite.com';
+
+interface CachedToken { token: string; expiresAt: number }
+let cachedGcsToken: CachedToken | null = null;
+
+async function getGcsToken(): Promise<string> {
+  if (cachedGcsToken && Date.now() < cachedGcsToken.expiresAt - 60_000) return cachedGcsToken.token;
+  const res = await fetch(METADATA_TOKEN_URL, { headers: { 'Metadata-Flavor': 'Google' } });
+  if (!res.ok) throw new Error(`metadata token fetch failed: ${res.status}`);
+  const data = await res.json() as { access_token?: string; expires_in?: number };
+  if (!data.access_token) throw new Error('metadata token missing access_token');
+  cachedGcsToken = { token: data.access_token, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 };
+  return cachedGcsToken.token;
+}
+
+async function getLarkBotToken(): Promise<string> {
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      app_id: process.env.LARK_APP_ID,
+      app_secret: process.env.LARK_APP_SECRET,
+    }),
+  });
+  const data = await res.json() as { tenant_access_token?: string };
+  return data.tenant_access_token ?? '';
+}
+
+interface JuniorCommentThread {
+  docId: string;
+  commentId: string;
+  featureWorkItemId?: string;
+  featureName?: string;
+  prdUrl: string;
+  askerOpenId: string;
+  lastJuniorReplyAtIso: string;
+}
+
+interface DigestState {
+  juniorCommentThreads?: Record<string, JuniorCommentThread>;
+  [k: string]: unknown;
+}
+
+export async function readJuniorCommentThread(docId: string, commentId: string): Promise<JuniorCommentThread | null> {
+  if (!docId || !commentId) return null;
+  try {
+    const token = await getGcsToken();
+    const url = `https://storage.googleapis.com/storage/v1/b/${STATE_BUCKET}/o/${encodeURIComponent(STATE_PATH)}?alt=media`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const state = await res.json() as DigestState;
+    return state.juniorCommentThreads?.[`${docId}:${commentId}`] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface FetchedReply {
+  text: string;
+  /** open_ids of every user mentioned in this reply (via the `person` element). */
+  mentionedOpenIds: string[];
+}
+
+/**
+ * Fetch a single reply within a comment thread from Lark drive
+ * comments API and return its decoded text + mentioned open_ids.
+ * Returns null on any error.
+ */
+export async function fetchCommentReply(
+  docId: string,
+  commentId: string,
+  replyId: string,
+): Promise<FetchedReply | null> {
+  if (!docId || !commentId) return null;
+  try {
+    const token = await getLarkBotToken();
+    const res = await fetch(
+      `${LARK_BASE_URL}/open-apis/drive/v1/files/${docId}/comments/${commentId}/replies?file_type=docx&user_id_type=open_id`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json() as {
+      code: number;
+      data?: { items?: Array<{
+        reply_id?: string;
+        content?: { elements?: Array<{
+          type?: string;
+          text_run?: { text?: string };
+          person?: { user_id?: string };
+          mention_user?: { user_id?: string };
+        }> };
+      }> };
+    };
+    if (data.code !== 0) return null;
+    const items = data.data?.items ?? [];
+    // Lark returns ALL replies in the thread; pick the one matching reply_id,
+    // or fall back to the last reply if reply_id doesnt match (defensive).
+    let target = items.find(r => r.reply_id === replyId);
+    if (!target) target = items[items.length - 1];
+    if (!target) return null;
+    const elements = target.content?.elements ?? [];
+    let text = '';
+    const mentionedOpenIds: string[] = [];
+    for (const el of elements) {
+      if (el.type === 'text_run') {
+        text += el.text_run?.text ?? '';
+      } else if (el.type === 'person' && el.person?.user_id) {
+        mentionedOpenIds.push(el.person.user_id);
+      } else if (el.type === 'mention_user' && el.mention_user?.user_id) {
+        mentionedOpenIds.push(el.mention_user.user_id);
+      }
+    }
+    return { text: text.trim(), mentionedOpenIds };
+  } catch {
+    return null;
+  }
+}

@@ -106,16 +106,78 @@ export async function POST(req: Request) {
     return new Response('', { status: 200 });
   }
 
-  // PHASE 1: log unknown event types so we can see whats coming in
-  // when we (manually) enable additional Lark event subscriptions —
-  // specifically the drive doc comment events that would let Junior
-  // reply in real time when someone follows up on a comment thread he
-  // has already posted into. Tracker state is already populated in
-  // state.juniorCommentThreads (see lib/letjr.ts). Once we confirm the
-  // event name + payload shape from these logs, well wire a real
-  // handler here that diffs the thread against lastJuniorReplyAtIso
-  // and triggers the letjr_reply draft+propose flow for any new
-  // non-Junior reply.
+  // PRD comment follow-up: when someone @-mentions Junior in a tracked
+  // PRD comment thread (one Junior already posted into), draft a
+  // proposal via Hamlet's /api/admin/letjr-draft and post to Thomas's
+  // personal chat for 👍 confirmation.
+  if (eventType === 'drive.notice.comment_add_v1') {
+    try {
+      const ev = (data.event ?? {}) as {
+        comment_id?: string;
+        reply_id?: string;
+        notice_meta?: {
+          file_token?: string;
+          file_type?: string;
+          notice_type?: string;
+          from_user_id?: { open_id?: string };
+        };
+      };
+      const docId = ev.notice_meta?.file_token ?? '';
+      const commentId = ev.comment_id ?? '';
+      const replyId = ev.reply_id ?? '';
+      const fromOpenId = ev.notice_meta?.from_user_id?.open_id ?? '';
+      const botOpenId = process.env.LARK_BOT_OPEN_ID ?? '';
+      console.log(`[drive-comment] event docId=${docId} commentId=${commentId} replyId=${replyId} from=${fromOpenId}`);
+      if (!docId || !commentId) return new Response('', { status: 200 });
+      if (botOpenId && fromOpenId === botOpenId) {
+        console.log('[drive-comment] skip: from is bot (echo)');
+        return new Response('', { status: 200 });
+      }
+      // Look up the tracker.
+      const { readJuniorCommentThread, fetchCommentReply } = await import('@/lib/letjr-followup');
+      const thread = await readJuniorCommentThread(docId, commentId);
+      if (!thread) {
+        console.log('[drive-comment] skip: thread not tracked');
+        return new Response('', { status: 200 });
+      }
+      // Fetch the new reply, check it actually @-mentions Junior.
+      const reply = await fetchCommentReply(docId, commentId, replyId);
+      if (!reply) {
+        console.log('[drive-comment] skip: failed to fetch reply');
+        return new Response('', { status: 200 });
+      }
+      const mentionedBot = botOpenId && reply.mentionedOpenIds.includes(botOpenId);
+      if (!mentionedBot) {
+        console.log(`[drive-comment] skip: bot not mentioned in reply (mentions=${reply.mentionedOpenIds.join(',')})`);
+        return new Response('', { status: 200 });
+      }
+      // Trigger Hamlet's letjr-draft flow.
+      const HAMLET_URL = process.env.HAMLET_BASE_URL ?? 'https://hamlet-416594255546.asia-southeast1.run.app';
+      const SECRET = process.env.HAMLET_AGENT_RUN_SECRET ?? process.env.AGENT_RUN_SECRET ?? '';
+      const res = await fetch(`${HAMLET_URL}/api/admin/letjr-draft`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(SECRET ? { Authorization: `Bearer ${SECRET}` } : {}),
+        },
+        body: JSON.stringify({
+          featureName: thread.featureName ?? '(unknown feature)',
+          prdUrl: thread.prdUrl,
+          commentId,
+          askerOpenId: fromOpenId,
+          questionText: reply.text,
+          questionSource: 'prd_comment',
+        }),
+      });
+      const body = await res.text().catch(() => '');
+      console.log(`[drive-comment] letjr-draft → HTTP ${res.status} ${body.slice(0, 200)}`);
+    } catch (e) {
+      console.warn('[drive-comment] handler error:', e);
+    }
+    return new Response('', { status: 200 });
+  }
+
+  // Log other unhandled event types (helps diagnose new subscriptions).
   if (eventType && eventType !== 'im.message.receive_v1') {
     const t = String(eventType);
     if (t.startsWith('drive.') || t.includes('comment')) {
