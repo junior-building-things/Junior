@@ -46,6 +46,7 @@ export interface PendingLetJrReply {
 
 interface DigestState {
   pendingLetJrReplies?: Record<string, PendingLetJrReply>;
+  juniorCommentThreads?: Record<string, JuniorCommentThread>;
   [k: string]: unknown;
 }
 
@@ -254,7 +255,29 @@ async function sendChatReply(
 export async function sendPending(entry: PendingLetJrReply): Promise<boolean> {
   if (entry.destination === 'prd_comment') {
     if (!entry.prdUrl || !entry.commentId) return false;
-    return sendPrdCommentReply(entry.prdUrl, entry.commentId, entry.askerOpenId, entry.replyText);
+    const ok = await sendPrdCommentReply(entry.prdUrl, entry.commentId, entry.askerOpenId, entry.replyText);
+    if (ok) {
+      // Phase 1 of real-time PRD comment awareness: remember that
+      // Junior posted into this thread. Future drive-comment events
+      // on this thread can look it up to know whether to draft a
+      // follow-up. Webhook subscription not yet wired (Phase 2).
+      try {
+        const token = await getLarkBotToken();
+        const docId = await resolveDocId(entry.prdUrl, token);
+        if (docId) {
+          await upsertJuniorCommentThread({
+            docId,
+            commentId: entry.commentId,
+            prdUrl: entry.prdUrl,
+            askerOpenId: entry.askerOpenId,
+            lastJuniorReplyAtIso: new Date().toISOString(),
+          });
+        }
+      } catch (e) {
+        console.warn('[letjr] failed to save juniorCommentThreads tracker:', e);
+      }
+    }
+    return ok;
   }
   if (entry.destination === 'chat') {
     if (!entry.chatId) return false;
@@ -279,4 +302,39 @@ export async function sendPending(entry: PendingLetJrReply): Promise<boolean> {
     return ok;
   }
   return false;
+}
+
+interface JuniorCommentThread {
+  docId: string;
+  commentId: string;
+  featureWorkItemId?: string;
+  featureName?: string;
+  prdUrl: string;
+  askerOpenId: string;
+  lastJuniorReplyAtIso: string;
+}
+
+/**
+ * Insert / update a tracker entry for a PRD comment thread Junior has
+ * posted into. Keyed by `docId:commentId` in
+ * `state.juniorCommentThreads`. Read-modify-write the shared GCS
+ * digest state file.
+ */
+async function upsertJuniorCommentThread(t: JuniorCommentThread): Promise<void> {
+  const state = (await readDigestState()) ?? {};
+  if (!state.juniorCommentThreads) state.juniorCommentThreads = {};
+  const key = `${t.docId}:${t.commentId}`;
+  state.juniorCommentThreads[key] = {
+    ...state.juniorCommentThreads[key],
+    ...t,
+  };
+  // Light pruning: drop entries older than 60 days.
+  const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+  for (const [k, v] of Object.entries(state.juniorCommentThreads)) {
+    if (new Date(v.lastJuniorReplyAtIso).getTime() < cutoff) {
+      delete state.juniorCommentThreads[k];
+    }
+  }
+  await writeDigestState(state);
+  console.log(`[letjr] tracked PRD comment thread ${key}`);
 }

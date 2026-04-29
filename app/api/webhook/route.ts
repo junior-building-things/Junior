@@ -106,7 +106,26 @@ export async function POST(req: Request) {
     return new Response('', { status: 200 });
   }
 
+  // PHASE 1: log unknown event types so we can see whats coming in
+  // when we (manually) enable additional Lark event subscriptions —
+  // specifically the drive doc comment events that would let Junior
+  // reply in real time when someone follows up on a comment thread he
+  // has already posted into. Tracker state is already populated in
+  // state.juniorCommentThreads (see lib/letjr.ts). Once we confirm the
+  // event name + payload shape from these logs, well wire a real
+  // handler here that diffs the thread against lastJuniorReplyAtIso
+  // and triggers the letjr_reply draft+propose flow for any new
+  // non-Junior reply.
   if (eventType && eventType !== 'im.message.receive_v1') {
+    const t = String(eventType);
+    if (t.startsWith('drive.') || t.includes('comment')) {
+      try {
+        const preview = JSON.stringify(data).slice(0, 1500);
+        console.log(`[webhook] unhandled drive/comment event type=${t} payload=${preview}`);
+      } catch { /* ignore */ }
+    } else {
+      console.log(`[webhook] unhandled event type=${t}`);
+    }
     return new Response('', { status: 200 });
   }
 
