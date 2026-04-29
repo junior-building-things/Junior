@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   }
 
   // Lazy-load heavy modules only for actual messages
-  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMessages, saveMessages, recordEventOnce }, { chat }] = await Promise.all([
+  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMergedHistory, appendTurn, clearChatHistory, recordEventOnce }, { chat }] = await Promise.all([
     import('@/lib/lark'),
     import('@/lib/store'),
     import('@/lib/gemini'),
@@ -155,9 +155,11 @@ export async function POST(req: Request) {
     reactToMessage(messageId, 'OnIt').catch(() => {});
   }
 
-  // Handle reset command
+  // Handle reset command — clears the chat-level history only. User-
+  // level cross-chat memory is intentionally preserved (a chat reset
+  // shouldnt wipe what Junior remembers about you everywhere else).
   if (userText.trim().toLowerCase() === 'reset') {
-    await saveMessages(chatId, []);
+    await clearChatHistory(chatId);
     try {
       if (messageId) await sendReply(messageId, 'Chat history cleared.', senderOpenId, senderName);
       else await sendMessage(chatId, 'Chat history cleared.');
@@ -165,8 +167,8 @@ export async function POST(req: Request) {
     return new Response('', { status: 200 });
   }
 
-  // Load chat history and generate response
-  const history = await loadMessages(chatId);
+  // Load merged history (chat-level + this user's cross-chat history).
+  const history = await loadMergedHistory(chatId, senderOpenId);
 
   let reply: string;
   try {
@@ -176,11 +178,10 @@ export async function POST(req: Request) {
     reply = "Sorry, I hit an error processing that. Try again?";
   }
 
-  // Save messages (skip failed responses to avoid polluting history)
+  // Persist the new turn to BOTH the chat-level and user-level files.
+  // Skip on known-bad replies to keep history clean.
   if (reply && reply !== 'Sorry, can you try asking that again?') {
-    history.push({ role: 'user', content: userText });
-    history.push({ role: 'model', content: reply });
-    await saveMessages(chatId, history);
+    await appendTurn(chatId, senderOpenId ?? '', userText, reply);
   }
 
   // Send reply

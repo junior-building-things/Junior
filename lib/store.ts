@@ -2,14 +2,25 @@ import { ChatMessage } from './types';
 
 const MAX_HISTORY = 30;
 
-// Per-chat conversation history is persisted in GCS so it survives
-// Cloud Run cold starts, instance churn, and deploys. One JSON object
-// per chatId at junior/chat-history/<chatId>.json in the shared
-// hamlet-state bucket. A short in-memory cache (per process) avoids
-// the GCS round-trip for fast follow-up turns.
+// Junior keeps two parallel conversation logs in GCS:
+//   - Chat-level   junior/chat-history/<chatId>.json
+//       Everything said in this chat by everyone. Gives Junior the
+//       collaborative thread continuity ("and the figma?" works even
+//       if a colleague just asked about the AB report).
+//   - User-level   junior/user-history/<openId>.json
+//       Everything THIS user has said to Junior across all chats.
+//       Gives Junior personal continuity (your follow-up Q in chat Y
+//       still has context from your chat-X turn yesterday).
+// At read time we merge the two streams by timestamp, dedup by
+// (ts, role), and cap to MAX_HISTORY. At write time we append the new
+// turn to both files.
+//
+// A short in-memory cache (per Cloud Run instance) avoids hitting GCS
+// twice for fast follow-up turns.
 
 const HISTORY_BUCKET = 'tiktok-im-hamlet-state';
-const HISTORY_PREFIX = 'junior/chat-history/';
+const CHAT_PREFIX = 'junior/chat-history/';
+const USER_PREFIX = 'junior/user-history/';
 const METADATA_TOKEN_URL =
   'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
 const HISTORY_CACHE_TTL_MS = 60_000;
@@ -30,41 +41,40 @@ async function getGcsToken(): Promise<string> {
 interface CachedHistory { data: ChatMessage[]; fetchedAt: number }
 const historyCache = new Map<string, CachedHistory>();
 
-function historyObjectName(chatId: string): string {
-  // chatId is a Lark oc_… string; safe enough as a path component but
-  // encode anyway in case of unexpected characters.
-  return `${HISTORY_PREFIX}${encodeURIComponent(chatId)}.json`;
+function chatPath(chatId: string): string {
+  return `${CHAT_PREFIX}${encodeURIComponent(chatId)}.json`;
+}
+function userPath(openId: string): string {
+  return `${USER_PREFIX}${encodeURIComponent(openId)}.json`;
 }
 
-export async function loadMessages(chatId: string): Promise<ChatMessage[]> {
-  const cached = historyCache.get(chatId);
+async function loadHistoryFile(path: string): Promise<ChatMessage[]> {
+  const cached = historyCache.get(path);
   if (cached && Date.now() - cached.fetchedAt < HISTORY_CACHE_TTL_MS) return cached.data;
   let data: ChatMessage[] = [];
   try {
     const token = await getGcsToken();
-    const url = `https://storage.googleapis.com/storage/v1/b/${HISTORY_BUCKET}/o/${encodeURIComponent(historyObjectName(chatId))}?alt=media`;
+    const url = `https://storage.googleapis.com/storage/v1/b/${HISTORY_BUCKET}/o/${encodeURIComponent(path)}?alt=media`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (res.ok) {
       const parsed = await res.json() as unknown;
       if (Array.isArray(parsed)) data = parsed as ChatMessage[];
     } else if (res.status !== 404) {
-      console.warn(`[store] loadMessages ${chatId} failed: ${res.status}`);
+      console.warn(`[store] load ${path} failed: ${res.status}`);
     }
   } catch (e) {
-    console.warn(`[store] loadMessages ${chatId} threw:`, e);
+    console.warn(`[store] load ${path} threw:`, e);
   }
-  historyCache.set(chatId, { data, fetchedAt: Date.now() });
+  historyCache.set(path, { data, fetchedAt: Date.now() });
   return data;
 }
 
-export async function saveMessages(chatId: string, messages: ChatMessage[]): Promise<void> {
+async function saveHistoryFile(path: string, messages: ChatMessage[]): Promise<void> {
   const trimmed = messages.slice(-MAX_HISTORY);
-  // Update in-memory cache immediately so the next read on the same
-  // instance gets the fresh history without waiting for GCS.
-  historyCache.set(chatId, { data: trimmed, fetchedAt: Date.now() });
+  historyCache.set(path, { data: trimmed, fetchedAt: Date.now() });
   try {
     const token = await getGcsToken();
-    const url = `https://storage.googleapis.com/upload/storage/v1/b/${HISTORY_BUCKET}/o?uploadType=media&name=${encodeURIComponent(historyObjectName(chatId))}`;
+    const url = `https://storage.googleapis.com/upload/storage/v1/b/${HISTORY_BUCKET}/o?uploadType=media&name=${encodeURIComponent(path)}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -72,11 +82,108 @@ export async function saveMessages(chatId: string, messages: ChatMessage[]): Pro
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      console.warn(`[store] saveMessages ${chatId} failed: ${res.status} ${body.slice(0, 200)}`);
+      console.warn(`[store] save ${path} failed: ${res.status} ${body.slice(0, 200)}`);
     }
   } catch (e) {
-    console.warn(`[store] saveMessages ${chatId} threw:`, e);
+    console.warn(`[store] save ${path} threw:`, e);
   }
+}
+
+/**
+ * Read the chat-level history (everything said in this chat by anyone).
+ */
+export async function loadChatHistory(chatId: string): Promise<ChatMessage[]> {
+  return loadHistoryFile(chatPath(chatId));
+}
+
+/**
+ * Read the user-level history (everything this user said to Junior
+ * across all chats). Returns [] if openId is missing.
+ */
+export async function loadUserHistory(openId: string): Promise<ChatMessage[]> {
+  if (!openId) return [];
+  return loadHistoryFile(userPath(openId));
+}
+
+/**
+ * Load chat-level + user-level history, merge by timestamp, dedup, and
+ * cap to MAX_HISTORY. The merged stream is what we hand to Gemini as
+ * conversation history.
+ */
+export async function loadMergedHistory(
+  chatId: string,
+  openId?: string,
+): Promise<ChatMessage[]> {
+  const [chat, user] = await Promise.all([
+    loadChatHistory(chatId),
+    openId ? loadUserHistory(openId) : Promise.resolve<ChatMessage[]>([]),
+  ]);
+  if (user.length === 0) return chat.slice(-MAX_HISTORY);
+  const seen = new Set<string>();
+  const all = [...chat, ...user];
+  // Older first. Messages without ts (legacy) keep their array order
+  // by sorting them to the front with a sentinel value.
+  all.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  const merged: ChatMessage[] = [];
+  for (const m of all) {
+    // Dedup key: same message saved to both files has the same ts +
+    // role + content prefix. Legacy messages without ts won't dedup
+    // (they were chat-only anyway).
+    const key = m.ts != null
+      ? `${m.ts}|${m.role}`
+      : `legacy|${m.role}|${m.content.slice(0, 60)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(m);
+  }
+  return merged.slice(-MAX_HISTORY);
+}
+
+/**
+ * Persist a single user→model turn. Appends to BOTH the chat file and
+ * the user file in parallel (each independently trimmed to MAX_HISTORY).
+ */
+export async function appendTurn(
+  chatId: string,
+  senderOpenId: string,
+  userText: string,
+  modelText: string,
+): Promise<void> {
+  const now = Date.now();
+  const userMsg: ChatMessage = { role: 'user', content: userText, ts: now, chatId, senderOpenId };
+  const modelMsg: ChatMessage = { role: 'model', content: modelText, ts: now + 1, chatId };
+
+  const tasks: Promise<void>[] = [];
+  // Chat file (always).
+  tasks.push((async () => {
+    const cur = await loadHistoryFile(chatPath(chatId));
+    cur.push(userMsg, modelMsg);
+    await saveHistoryFile(chatPath(chatId), cur);
+  })());
+  // User file (only if we have an open_id).
+  if (senderOpenId) {
+    tasks.push((async () => {
+      const cur = await loadHistoryFile(userPath(senderOpenId));
+      cur.push(userMsg, modelMsg);
+      await saveHistoryFile(userPath(senderOpenId), cur);
+    })());
+  }
+  await Promise.all(tasks);
+}
+
+/**
+ * Wipe a single chat's history. Does NOT touch the user-level files —
+ * if a user wants to wipe their cross-chat memory, that's a different
+ * operation (not exposed yet).
+ */
+export async function clearChatHistory(chatId: string): Promise<void> {
+  await saveHistoryFile(chatPath(chatId), []);
+}
+
+// ─── Back-compat exports (for callers not yet migrated) ─────────────────────
+export const loadMessages = loadChatHistory;
+export async function saveMessages(chatId: string, messages: ChatMessage[]): Promise<void> {
+  await saveHistoryFile(chatPath(chatId), messages);
 }
 
 // Legacy KV path for the dedup helper below — kept until we migrate
