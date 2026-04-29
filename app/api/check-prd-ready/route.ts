@@ -5,23 +5,8 @@ import { recordEventOnce } from '@/lib/store';
 
 export const maxDuration = 30;
 
-// Nodes that come AFTER "Requirements Prep" — if a feature is at any of these,
-// the PRD is considered ready. (Mirrors POST_REQ_PREP_NODES in poll-prd-ready.)
-const POST_REQ_PREP_NODES = new Set([
-  '产品线内初评',
-  '技术评估&排优',
-  '需求详评',
-  '需求评审',
-  '技术方案设计',
-  'iOS 开发',
-  'UI&UX验收',
-  'Server上线',
-  'AB实验',
-  'PM验收',
-  'PM走查',
-  '依赖判断',
-  '合规评估',
-]);
+/** The single Meego overall status that triggers the PRD-Ready card. */
+const LINE_REVIEW_STATUS = '待线内评审';
 
 /**
  * POST /api/check-prd-ready
@@ -29,10 +14,13 @@ const POST_REQ_PREP_NODES = new Set([
  * Body: { project: string, id: string }
  * Auth: Bearer CRON_SECRET (shared with the nightly poll)
  *
- * Single-feature variant of /api/poll-prd-ready. If the feature has moved
- * past Requirements Prep AND no PRD-Ready card has been sent for it before,
- * sends the card to the compliance chat. Persistent dedup via GCS so calling
- * this repeatedly is safe.
+ * Single-feature variant of /api/poll-prd-ready. Strict guardrail: only
+ * fires when the feature's CURRENT overall status is 待线内评审 (Line
+ * Review). The card may trigger compliance review downstream, so we
+ * never fire for features already past Line Review (e.g. RD Allocation,
+ * Development, Done) — even on first encounter.
+ *
+ * Persistent dedup via GCS so calling this repeatedly is safe.
  */
 export async function POST(req: NextRequest) {
   const auth = req.headers.get('authorization') ?? '';
@@ -47,10 +35,13 @@ export async function POST(req: NextRequest) {
 
   try {
     const brief = await getFeatureBrief(project, id);
-    const isPastPrep = brief.activeNodesCn.some(n => POST_REQ_PREP_NODES.has(n));
-
-    if (!isPastPrep) {
-      return NextResponse.json({ ok: true, sent: false, reason: 'not past Requirements Prep', activeNodesCn: brief.activeNodesCn });
+    if (brief.overallStatusName !== LINE_REVIEW_STATUS) {
+      return NextResponse.json({
+        ok: true,
+        sent: false,
+        reason: `current status "${brief.overallStatusName || '(unknown)'}" is not Line Review`,
+        overallStatusName: brief.overallStatusName,
+      });
     }
 
     const dedupKey = `prd-ready:${project}:${id}`;

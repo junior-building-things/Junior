@@ -256,6 +256,8 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   meegoUrl: string;
   /** Active workflow node names in Chinese (e.g. ['iOS 开发', 'Android 开发']). */
   activeNodesCn: string[];
+  /** Overall workflow status name in Chinese (e.g. '待线内评审', '开发中', '已完成'). Empty when unknown. */
+  overallStatusName: string;
 }> {
   const meegoUrl = `https://meego.larkoffice.com/${projectKey}/story/detail/${workItemId}`;
   const raw = await callMeegoMcp('get_workitem_brief', {
@@ -269,14 +271,19 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   let prd = '';
   let priorityRaw = '';
   let activeNodesCn: string[] = [];
+  let overallStatusName = '';
 
   try {
     const briefJson = JSON.parse(raw) as {
-      work_item_attribute?: { work_item_name?: string };
+      work_item_attribute?: {
+        work_item_name?: string;
+        work_item_status?: { key?: string; name?: string };
+      };
       work_item_fields?: Array<{ key?: string; value?: unknown }>;
       work_item_current_node?: Array<{ name?: string }>;
     };
     name = briefJson.work_item_attribute?.work_item_name ?? '';
+    overallStatusName = briefJson.work_item_attribute?.work_item_status?.name ?? '';
     const getField = (key: string): string => {
       const f = briefJson.work_item_fields?.find(fi => fi.key === key);
       if (!f || f.value === undefined || f.value === null) return '';
@@ -303,7 +310,7 @@ export async function getFeatureBrief(projectKey: string, workItemId: string): P
   // Normalize priority: JSON returns '0'..'3', markdown returns 'P0'..'P3'.
   if (/^[0-3]$/.test(priorityRaw)) priorityRaw = `P${priorityRaw}`;
   if (!priorityRaw) priorityRaw = 'P2';
-  return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn };
+  return { name, priority: priorityRaw, prd, meegoUrl, activeNodesCn, overallStatusName };
 }
 
 /** Structured version of getMyFeatures for internal use */

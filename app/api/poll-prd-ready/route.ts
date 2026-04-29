@@ -5,23 +5,9 @@ import { recordEventOnce } from '@/lib/store';
 
 export const maxDuration = 60;
 
-// Nodes that come AFTER "Requirements Prep" — if a feature is at any of these,
-// the PRD is considered ready
-const POST_REQ_PREP_NODES = new Set([
-  '产品线内初评',
-  '技术评估&排优',
-  '需求详评',
-  '需求评审',
-  '技术方案设计',
-  'iOS 开发',
-  'UI&UX验收',
-  'Server上线',
-  'AB实验',
-  'PM验收',
-  'PM走查',
-  '依赖判断',
-  '合规评估',
-]);
+/** Active node + overall status that mean "currently at Line Review". */
+const LINE_REVIEW_NODE = '产品线内初评';
+const LINE_REVIEW_STATUS = '待线内评审';
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -29,9 +15,9 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
-  // ?dryRun=true marks all past-Requirements-Prep features as "already sent"
-  // without actually sending cards. Useful for initial backfill so existing
-  // features don't trigger a flood of cards on the first real run.
+  // ?dryRun=true marks all Line-Review features as "already sent" without
+  // actually sending cards. Useful for initial backfill so existing features
+  // don't trigger a flood of cards on the first real run.
   const dryRun = req.nextUrl.searchParams.get('dryRun') === 'true';
 
   try {
@@ -40,8 +26,25 @@ export async function GET(req: NextRequest) {
     const sentIds: string[] = [];
 
     for (const f of features) {
-      // Skip if not past Requirements Prep
-      if (!POST_REQ_PREP_NODES.has(f.nodeCn)) continue;
+      // Hard guardrail: the feature's active node must be the Line Review
+      // node. Anything later (RD Allocation, PRD Walkthrough, Development,
+      // …) does NOT fire — the card may trigger compliance review and we
+      // never want it sent retroactively for features past Line Review.
+      if (f.nodeCn !== LINE_REVIEW_NODE) continue;
+
+      // Belt-and-suspenders: re-confirm via the brief's overall status,
+      // since a feature can have multiple active nodes simultaneously.
+      let brief: Awaited<ReturnType<typeof getFeatureBrief>>;
+      try {
+        brief = await getFeatureBrief(f.project, String(f.id));
+      } catch (e) {
+        console.error(`[poll] brief fetch failed for ${f.name} (${f.id}):`, e);
+        continue;
+      }
+      if (brief.overallStatusName !== LINE_REVIEW_STATUS) {
+        console.log(`[poll] PRD Ready SKIPPED for "${f.name}" — overallStatus="${brief.overallStatusName}" (only fires when Line Review)`);
+        continue;
+      }
 
       // Skip if already sent (persistent dedup via KV)
       const dedupKey = `prd-ready:${f.project}:${f.id}`;
@@ -54,7 +57,6 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        const brief = await getFeatureBrief(f.project, String(f.id));
         await sendPrdReadyCard({
           featureName: brief.name,
           prdUrl: brief.prd,
