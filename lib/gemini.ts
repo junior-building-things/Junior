@@ -249,6 +249,17 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'remember_preference',
+    description: 'Remember a user-stated preference by appending it to preferences.md (which gets loaded into your system prompt on every chat). Use this whenever the user says things like "from now on…", "going forward…", "always…", "remember to…", "in the future…", or any clear standing instruction about how you should behave. Phrase the preference as a concise instruction in second person ("Always use bullet lists when…", "Default to formal tone when…").',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        preference: { type: Type.STRING, description: 'The preference, written as a clear standing instruction. One sentence is ideal; multiple sentences OK if needed for clarity.' },
+      },
+      required: ['preference'],
+    },
+  },
+  {
     name: 'whoami',
     description: 'Get the current user\'s Lark identity info (open_id, name). Use when the user asks "who am I", "what\'s my open id", or similar.',
     parameters: { type: Type.OBJECT, properties: {} },
@@ -465,6 +476,18 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
       case 'whoami':
         return JSON.stringify({ open_id: ctx.senderOpenId ?? 'unknown', name: ctx.senderName ?? 'unknown' });
 
+      case 'remember_preference': {
+        const text = String(args.preference ?? '').trim();
+        if (!text) return 'No preference text provided — nothing saved.';
+        const { appendToContextFile } = await import('./context');
+        const stamp = new Date().toISOString().slice(0, 10);
+        const line = `- ${text} _(added ${stamp}${ctx.senderName ? ` by ${ctx.senderName}` : ''})_`;
+        const ok = await appendToContextFile('preferences.md', line);
+        return ok
+          ? `Preference saved to preferences.md. It will apply on the next turn.`
+          : `Couldn't save the preference (GCS write failed). Please try again.`;
+      }
+
       case 'summarize_conversations': {
         const userToken = await lark.getUserToken();
         const userOpenId = process.env.LARK_USER_OPEN_ID;
@@ -608,10 +631,21 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     }
   }
 
+  // Load editable context files (system.md, glossary.md, skill_*.md,
+  // preferences.md, etc.) from GCS and append to the system prompt.
+  // Cached for 60s per instance so a normal turn doesnt hit GCS.
+  let contextBlock = '';
+  try {
+    const { buildContextBlock } = await import('./context');
+    contextBlock = await buildContextBlock();
+  } catch (e) {
+    console.warn('[gemini] context load failed:', e);
+  }
+
   try {
     const { getPrompt, getPromptThinkingBudget, thinkingBudgetToConfig } = await import('./prompts');
     const baseSystemPrompt = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
-    const systemInstruction = baseSystemPrompt + chatFeatureContext;
+    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext;
     // Thinking budget is editable per-prompt from the Hamlet Prompts tab.
     // Defaults to 'dynamic' (model decides per round). CHAT_TIMEOUT_MS
     // (60s) is the safety net against runaway thinking on large prompts.
