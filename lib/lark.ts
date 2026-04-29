@@ -211,6 +211,82 @@ export async function sendCardMessage(chatId: string, title: string, markdown: s
  * the reply has been sent). Returns null on any failure — the caller
  * should treat that as "no reaction was placed" and skip the cleanup.
  */
+/**
+ * Fetch a message by id and extract its readable text. Used to give
+ * Junior thread-context awareness — when a colleague @-mentions
+ * Junior in a thread reply, we fetch the parent message so Junior
+ * knows what "this" refers to.
+ *
+ * Handles text, post (rich text), and interactive (card) message
+ * types. Returns '' on any error / unsupported type.
+ */
+export async function fetchMessageText(messageId: string): Promise<string> {
+  if (!messageId) return '';
+  try {
+    const token = await getTenantToken();
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json() as {
+      code: number;
+      data?: { items?: Array<{ msg_type?: string; body?: { content?: string } }> };
+    };
+    if (data.code !== 0) return '';
+    const m = data.data?.items?.[0];
+    if (!m) return '';
+    const raw = m.body?.content ?? '';
+    return decodeMessageBody(m.msg_type ?? '', raw);
+  } catch {
+    return '';
+  }
+}
+
+function decodeMessageBody(msgType: string, raw: string): string {
+  try {
+    if (msgType === 'text') {
+      const o = JSON.parse(raw) as { text?: string };
+      return o.text ?? '';
+    }
+    if (msgType === 'post') {
+      // { zh_cn: { title, content: [[inline...]] }, ...other locales }
+      const o = JSON.parse(raw) as Record<string, { title?: string; content?: Array<Array<{ tag?: string; text?: string; href?: string; user_id?: string }>> }>;
+      const localeKey = Object.keys(o)[0];
+      if (!localeKey) return raw;
+      const block = o[localeKey];
+      const lines: string[] = [];
+      if (block.title) lines.push(block.title);
+      for (const para of block.content ?? []) {
+        const text = para.map(inline => {
+          if (inline.tag === 'text') return inline.text ?? '';
+          if (inline.tag === 'a') return `${inline.text ?? ''} (${inline.href ?? ''})`;
+          if (inline.tag === 'at') return `@${inline.user_id ?? ''}`;
+          if (inline.tag === 'img') return '[image]';
+          return '';
+        }).join('');
+        if (text.trim()) lines.push(text);
+      }
+      return lines.join('\n');
+    }
+    if (msgType === 'interactive') {
+      // Card. Extract header title + every lark_md div content.
+      const card = JSON.parse(raw) as {
+        header?: { title?: { content?: string } };
+        elements?: Array<{ tag?: string; text?: { content?: string } }>;
+      };
+      const lines: string[] = [];
+      const header = card.header?.title?.content;
+      if (header) lines.push(header);
+      for (const el of card.elements ?? []) {
+        if (el.tag === 'div' && el.text?.content) lines.push(el.text.content);
+      }
+      return lines.join('\n');
+    }
+    return raw.length > 2000 ? raw.slice(0, 2000) + '…' : raw;
+  } catch {
+    return raw.length > 2000 ? raw.slice(0, 2000) + '…' : raw;
+  }
+}
+
 export async function reactToMessage(messageId: string, emoji: string): Promise<string | null> {
   try {
     const token = await getTenantToken();

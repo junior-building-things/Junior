@@ -241,9 +241,26 @@ export async function POST(req: Request) {
   // Load merged history (chat-level + this user's cross-chat history).
   const history = await loadMergedHistory(chatId, senderOpenId);
 
+  // If this message is a thread reply, fetch the parent message body
+  // so we can give Junior context for "this" / "that" references.
+  // Best-effort: a fetch failure just means no context — better than
+  // failing the whole turn.
+  let parentMessageContent = '';
+  if (parentId) {
+    try {
+      const { fetchMessageText } = await import('@/lib/lark');
+      parentMessageContent = await fetchMessageText(parentId);
+      if (parentMessageContent) {
+        console.log(`[webhook] thread parent fetched (${parentMessageContent.length} chars)`);
+      }
+    } catch (e) {
+      console.warn('[webhook] fetch parent message failed:', e);
+    }
+  }
+
   let reply: string;
   try {
-    reply = await chat(history, userText, { senderOpenId, senderName, chatId });
+    reply = await chat(history, userText, { senderOpenId, senderName, chatId, parentMessageContent });
   } catch (err) {
     console.error('Gemini error:', err);
     reply = "Sorry, I hit an error processing that. Try again?";

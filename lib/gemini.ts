@@ -278,7 +278,15 @@ const tools: FunctionDeclaration[] = [
 
 // ─── Tool execution ──────────────────────────────────────────────────────────
 
-interface ChatContext { senderOpenId?: string; senderName?: string; chatId?: string }
+interface ChatContext {
+  senderOpenId?: string;
+  senderName?: string;
+  chatId?: string;
+  /** Decoded text of the message this user message is replying to in
+   *  thread (if any). Lets Junior know what "this" / "that" refers to
+   *  when colleagues thread-reply on a Junior-sent post or card. */
+  parentMessageContent?: string;
+}
 
 async function executeTool(name: string, args: Record<string, unknown>, ctx: ChatContext = {}): Promise<string> {
   try {
@@ -634,10 +642,22 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     console.warn('[gemini] context load failed:', e);
   }
 
+  // Thread-parent context: when the user is replying in a thread to
+  // another message (typically a Junior-sent post or card in the PM
+  // group), include the parent's text so Junior can resolve "this" /
+  // "that" / "the background" references.
+  let threadParentContext = '';
+  if (ctx.parentMessageContent && ctx.parentMessageContent.trim()) {
+    const truncated = ctx.parentMessageContent.length > 4000
+      ? ctx.parentMessageContent.slice(0, 4000) + '\n…[truncated]'
+      : ctx.parentMessageContent;
+    threadParentContext = `\n\nTHREAD PARENT CONTEXT (the message the user is replying to in thread):\n${truncated}\n\nWhen the user says "this", "that", "the [section]", or asks about content without naming it, assume they mean the message above.`;
+  }
+
   try {
     const { getPrompt, getPromptThinkingBudget, thinkingBudgetToConfig } = await import('./prompts');
     const baseSystemPrompt = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
-    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext;
+    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext + threadParentContext;
     // Thinking budget is editable per-prompt from the Hamlet Prompts tab.
     // Defaults to 'dynamic' (model decides per round). CHAT_TIMEOUT_MS
     // (60s) is the safety net against runaway thinking on large prompts.
