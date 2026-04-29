@@ -581,6 +581,10 @@ Rules:
 // on persona/skills/glossary in Hamlets Junior Context tab without code
 // changes. Must stay in sync with the Hamlet registry default
 // (lib/prompt-registry.ts JUNIOR_SYSTEM_PROMPT).
+//
+// Two prompts: chat (this one, lark_md formatting allowed) and PRD
+// comment (COMMENT_SYSTEM_PROMPT below, plain text only). chat() picks
+// based on ctx.replyChannel.
 const SYSTEM_PROMPT = `You are Thomas Jr., an AI assistant embedded in TikTok IM Lark group chats.
 
 Your detailed persona, capabilities, glossary, and skill playbooks live in the ADDITIONAL CONTEXT block below — read those files (system.md, glossary.md, skill_*.md, preferences.md) carefully and follow them. They override generic instincts.
@@ -593,6 +597,26 @@ Non-negotiable formatting rules:
 Default to action: when a tool can answer the question, call it instead of asking the user. Only ask a clarifying question when you truly can't proceed.
 
 When the user states a standing preference ("from now on…", "always…", "going forward…"), call the remember_preference tool so it persists.`;
+
+// Used when Junior auto-replies to a PRD comment thread (drive comments).
+// Drive comments are PLAIN TEXT — Markdown shows up as literal characters —
+// and they're read inline in the doc, so concision matters more than chat.
+// Must stay in sync with Hamlets registry default
+// (lib/prompt-registry.ts JUNIOR_COMMENT_SYSTEM_PROMPT).
+const COMMENT_SYSTEM_PROMPT = `You are Thomas Jr., responding to a PRD comment on a TikTok feature.
+
+Your detailed persona, capabilities, glossary, and skill playbooks live in the ADDITIONAL CONTEXT block below — read those files (system.md, glossary.md, skill_*.md, preferences.md) carefully and follow them. They override generic instincts.
+
+Hard formatting rules for THIS reply (do not abandon):
+- PLAIN TEXT only. Lark drive comments do NOT render Markdown. No **bold**, *italic*, \`code\`, bullet lists, numbered lists, or headings — they will appear as literal characters.
+- Inline URLs render as clickable links automatically — paste them inline.
+- The asker is automatically @-tagged for you by the runtime; do NOT add another @-mention of them.
+- For @-mentioning OTHER people (e.g. the PM, Tech Owner): use the syntax \`<at user_id="ou_xxx"></at>\` ONLY if you have their open_id. If you only have their email or name, write the name as plain text (e.g. "Thomas") — the email-style \`<at email=...>\` syntax does NOT work in drive comments.
+- Reply in English even if asked in Chinese. Translate any Chinese data inline.
+
+Be concise: 1–3 short sentences typical, max 5. PRD comments are read inline in the doc next to the highlighted text — short and direct beats thorough.
+
+Default to action: when a tool can answer the question, call it instead of asking. If you genuinely can't answer from the PRD content, feature context, or any tool, say so honestly and indicate you'll check with the PM.`;
 
 // ─── Main chat function ──────────────────────────────────────────────────────
 
@@ -668,23 +692,21 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
     threadParentContext = `\n\nTHREAD PARENT CONTEXT (the message the user is replying to in thread):\n${truncated}\n\nWhen the user says "this", "that", "the [section]", or asks about content without naming it, assume they mean the message above.`;
   }
 
-  // Reply-channel formatting constraints: Lark drive comments (the PRD
-  // comment auto-reply path) DO NOT render Markdown — **bold** shows
-  // up literally. Inject a hard constraint so Junior writes plain text
-  // for that channel.
-  let formatConstraint = '';
-  if (ctx.replyChannel === 'prd_comment') {
-    formatConstraint = `\n\nRESPONSE FORMAT (HARD CONSTRAINT): Your reply will be posted as a Lark drive doc comment. Drive comments do NOT render Markdown. Do NOT use **bold**, *italic*, \`code\`, bullet lists, numbered lists, headings (#), or any other Markdown syntax — they will appear as literal characters to readers. Write in plain prose, separating ideas with sentences and paragraphs only. Inline URLs render as clickable links automatically. @-mentions are supported via the <at user_id="ou_xxx"></at> tag (the runtime parses these into Lark person elements).`;
-  }
-
   try {
     const { getPrompt, getPromptThinkingBudget, thinkingBudgetToConfig } = await import('./prompts');
-    const baseSystemPrompt = await getPrompt('junior.system_prompt', SYSTEM_PROMPT);
-    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext + threadParentContext + formatConstraint;
+    // Pick base prompt by channel: chat IM (lark_md) vs PRD comment
+    // (plain text). Each prompt is independently editable in Hamlets
+    // Prompts UI; the appropriate one is fetched per turn.
+    const promptId = ctx.replyChannel === 'prd_comment'
+      ? 'junior.comment_system_prompt'
+      : 'junior.system_prompt';
+    const fallback = ctx.replyChannel === 'prd_comment' ? COMMENT_SYSTEM_PROMPT : SYSTEM_PROMPT;
+    const baseSystemPrompt = await getPrompt(promptId, fallback);
+    const systemInstruction = baseSystemPrompt + contextBlock + chatFeatureContext + threadParentContext;
     // Thinking budget is editable per-prompt from the Hamlet Prompts tab.
     // Defaults to 'dynamic' (model decides per round). CHAT_TIMEOUT_MS
     // (60s) is the safety net against runaway thinking on large prompts.
-    const thinkingBudget = await getPromptThinkingBudget('junior.system_prompt', 'dynamic');
+    const thinkingBudget = await getPromptThinkingBudget(promptId, 'dynamic');
     const chatSession = ai.chats.create({
       model: MODEL,
       history: chatHistory,
