@@ -133,14 +133,8 @@ export async function POST(req: Request) {
         console.log('[drive-comment] skip: from is bot (echo)');
         return new Response('', { status: 200 });
       }
-      // Look up the tracker.
-      const { readJuniorCommentThread, fetchCommentReply } = await import('@/lib/letjr-followup');
-      const thread = await readJuniorCommentThread(docId, commentId);
-      if (!thread) {
-        console.log('[drive-comment] skip: thread not tracked');
-        return new Response('', { status: 200 });
-      }
       // Fetch the new reply, check it actually @-mentions Junior.
+      const { fetchCommentReply, findFeatureByDocId } = await import('@/lib/letjr-followup');
       const reply = await fetchCommentReply(docId, commentId, replyId);
       if (!reply) {
         console.log('[drive-comment] skip: failed to fetch reply');
@@ -151,6 +145,15 @@ export async function POST(req: Request) {
         console.log(`[drive-comment] skip: bot not mentioned in reply (mentions=${reply.mentionedOpenIds.join(',')})`);
         return new Response('', { status: 200 });
       }
+      // Resolve feature via docId match against Hamlet cache. Falls back
+      // to a tracker lookup (saved when Junior previously posted into
+      // this thread) for cases where the docId resolution misses.
+      const feature = await findFeatureByDocId(docId);
+      if (!feature) {
+        console.log(`[drive-comment] skip: no feature found in Hamlet cache for docId=${docId}`);
+        return new Response('', { status: 200 });
+      }
+      const thread = { prdUrl: feature.prd, featureName: feature.name };
       // Run Junior's general chat flow with the new reply as user
       // input. Uses a synthetic chatId so per-thread chat history
       // works; passes prdUrl so feature context resolves; passes the

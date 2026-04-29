@@ -55,6 +55,24 @@ interface DigestState {
   [k: string]: unknown;
 }
 
+/**
+ * Find a Hamlet-cached feature whose PRD URL contains the given docId.
+ * Returns the cached feature (with at least .name and .prd) or null.
+ */
+export async function findFeatureByDocId(docId: string): Promise<{ name: string; prd: string } | null> {
+  if (!docId) return null;
+  try {
+    const { loadHamletFeatures } = await import('./hamlet-cache');
+    const features = await loadHamletFeatures();
+    const m = features.find(f => f.prd && f.prd.includes(docId));
+    if (!m || !m.prd) return null;
+    return { name: m.name, prd: m.prd };
+  } catch (e) {
+    console.warn('[letjr-followup] findFeatureByDocId failed:', e);
+    return null;
+  }
+}
+
 export async function readJuniorCommentThread(docId: string, commentId: string): Promise<JuniorCommentThread | null> {
   if (!docId || !commentId) return null;
   try {
