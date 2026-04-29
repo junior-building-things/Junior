@@ -246,7 +246,10 @@ async function sendChatReply(
 }
 
 /**
- * Dispatch a consumed proposal to its destination.
+ * Dispatch a consumed proposal to its destination. On a successful
+ * chat-destination send, also append the reply to the chat-level
+ * history file so future Junior turns in the same chat see what
+ * was already answered.
  */
 export async function sendPending(entry: PendingLetJrReply): Promise<boolean> {
   if (entry.destination === 'prd_comment') {
@@ -255,7 +258,25 @@ export async function sendPending(entry: PendingLetJrReply): Promise<boolean> {
   }
   if (entry.destination === 'chat') {
     if (!entry.chatId) return false;
-    return sendChatReply(entry.chatId, entry.chatParentMessageId, entry.askerOpenId, entry.replyText);
+    const ok = await sendChatReply(entry.chatId, entry.chatParentMessageId, entry.askerOpenId, entry.replyText);
+    if (ok) {
+      try {
+        const { appendTurn } = await import('./store');
+        // Pair the reply with a synthetic user note so Gemini sees the
+        // alternation and knows this turn is a letjr-flow answer to a
+        // chat question (the actual question lives in the parent thread,
+        // surfaced via THREAD PARENT CONTEXT when relevant).
+        await appendTurn(
+          entry.chatId,
+          entry.askerOpenId ?? '',
+          '(question from chat — see thread above)',
+          entry.replyText,
+        );
+      } catch (e) {
+        console.warn('[letjr] failed to append chat-history turn for letjr reply:', e);
+      }
+    }
+    return ok;
   }
   return false;
 }
