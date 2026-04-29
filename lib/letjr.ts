@@ -145,13 +145,29 @@ async function sendPrdCommentReply(
   };
 
   if (askerOpenId) {
-    const withMention = [
-      { type: 'mention_user', mention_user: { user_id: askerOpenId } },
-      { type: 'text_run', text_run: { text: ` ${replyText}` } },
+    // Drive-comment replies use the `person` element type (NOT
+    // mention_user — thats chat-message syntax, which Lark rejects
+    // here with code=99992402). Try person first; if validation
+    // still fails, fall back to plain text so the reply still lands.
+    const variants: Array<{ label: string; elements: Array<Record<string, unknown>>; withUserIdType: boolean }> = [
+      {
+        label: 'person',
+        elements: [
+          { type: 'person', person: { user_id: askerOpenId } },
+          { type: 'text_run', text_run: { text: ` ${replyText}` } },
+        ],
+        withUserIdType: true,
+      },
     ];
-    const data = await post(withMention, true);
-    if (data.code === 0) return true;
-    console.warn(`[letjr] PRD comment reply with mention failed: code=${data.code} msg=${data.msg} — falling back to plain text`);
+    for (const v of variants) {
+      const data = await post(v.elements, v.withUserIdType);
+      if (data.code === 0) {
+        console.log(`[letjr] PRD comment reply with ${v.label} mention OK`);
+        return true;
+      }
+      console.warn(`[letjr] PRD comment reply with ${v.label} mention failed: code=${data.code} msg=${data.msg}`);
+    }
+    console.warn('[letjr] PRD comment reply: all mention variants failed — falling back to plain text');
   }
 
   const plain = [{ type: 'text_run', text_run: { text: replyText } }];
