@@ -158,7 +158,9 @@ export async function POST(req: Request) {
   // Handle reset command — clears the chat-level history only. User-
   // level cross-chat memory is intentionally preserved (a chat reset
   // shouldnt wipe what Junior remembers about you everywhere else).
-  if (userText.trim().toLowerCase() === 'reset') {
+  // Accepts "reset" or "/reset" (any leading slashes stripped).
+  const resetCmd = userText.trim().toLowerCase().replace(/^\/+/, '');
+  if (resetCmd === 'reset') {
     await clearChatHistory(chatId);
     try {
       if (messageId) await sendReply(messageId, 'Chat history cleared.', senderOpenId, senderName);
