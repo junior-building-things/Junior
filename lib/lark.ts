@@ -205,13 +205,42 @@ export async function sendCardMessage(chatId: string, title: string, markdown: s
   });
 }
 
-export async function reactToMessage(messageId: string, emoji: string): Promise<void> {
-  const token = await getTenantToken();
-  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reactions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reaction_type: { emoji_type: emoji } }),
-  }).catch(() => {}); // best-effort
+/**
+ * Add an emoji reaction to a message. Returns the reaction_id so the
+ * caller can remove it later (e.g. clear the "Typing" indicator after
+ * the reply has been sent). Returns null on any failure — the caller
+ * should treat that as "no reaction was placed" and skip the cleanup.
+ */
+export async function reactToMessage(messageId: string, emoji: string): Promise<string | null> {
+  try {
+    const token = await getTenantToken();
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reactions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reaction_type: { emoji_type: emoji } }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { code?: number; data?: { reaction_id?: string } };
+    if (data.code !== 0) return null;
+    return data.data?.reaction_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Remove a previously-placed reaction by reaction_id. Best-effort —
+ * swallows errors so a failed cleanup doesn't crash the request.
+ */
+export async function removeReaction(messageId: string, reactionId: string): Promise<void> {
+  if (!messageId || !reactionId) return;
+  try {
+    const token = await getTenantToken();
+    await fetch(
+      `${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reactions/${reactionId}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+    );
+  } catch { /* best-effort */ }
 }
 
 // ─── Compliance card ────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ export async function POST(req: Request) {
   }
 
   // Lazy-load heavy modules only for actual messages
-  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage }, { loadMergedHistory, appendTurn, clearChatHistory, clearUserHistory, recordEventOnce }, { chat }] = await Promise.all([
+  const [{ shouldReply, sanitizeText, sendReply, sendMessage, reactToMessage, removeReaction }, { loadMergedHistory, appendTurn, clearChatHistory, clearUserHistory, recordEventOnce }, { chat }] = await Promise.all([
     import('@/lib/lark'),
     import('@/lib/store'),
     import('@/lib/gemini'),
@@ -150,14 +150,10 @@ export async function POST(req: Request) {
     return new Response('', { status: 200 });
   }
 
-  // React with a thinking emoji while processing
-  if (messageId) {
-    reactToMessage(messageId, 'OnIt').catch(() => {});
-  }
-
   // Handle reset command — clears BOTH the chat-level history and the
   // sender's cross-chat user history. Accepts "reset" or "/reset"
-  // (any leading slashes stripped).
+  // (any leading slashes stripped). Reset is instant, so we skip the
+  // Typing reaction for it.
   const resetCmd = userText.trim().toLowerCase().replace(/^\/+/, '');
   if (resetCmd === 'reset') {
     await Promise.all([
@@ -173,6 +169,14 @@ export async function POST(req: Request) {
     } catch {}
     return new Response('', { status: 200 });
   }
+
+  // React with a "Typing" emoji while we process. We hold onto the
+  // returned reaction_id (as a promise) so we can remove the indicator
+  // after the reply has been sent. Done in parallel — the reply path
+  // doesnt wait on the reaction call.
+  const reactionIdPromise: Promise<string | null> = messageId
+    ? reactToMessage(messageId, 'Typing')
+    : Promise.resolve(null);
 
   // Load merged history (chat-level + this user's cross-chat history).
   const history = await loadMergedHistory(chatId, senderOpenId);
@@ -200,6 +204,15 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     console.error('Lark send error:', err);
+  }
+
+  // Clean up the "Typing" reaction now that the reply (or error) has
+  // been delivered. Fire-and-forget — failures here arent worth
+  // surfacing to the user.
+  if (messageId) {
+    reactionIdPromise
+      .then(reactionId => { if (reactionId) return removeReaction(messageId, reactionId); })
+      .catch(() => {});
   }
 
   return new Response('', { status: 200 });
