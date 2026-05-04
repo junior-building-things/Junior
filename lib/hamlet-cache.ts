@@ -48,7 +48,7 @@ export interface HamletFeature {
    * the Delayed badge still renders). Junior should treat this as
    * the effective risk.
    */
-  versionChanges?: Array<{ date: string; from: string; to: string; reason?: string }>;
+  versionChanges?: Array<{ date: string; from: string; to: string; reason?: string; reasonAttempted?: boolean }>;
   pmOwner?: string;
   techOwner?: string;
   iosOwner?: string;
