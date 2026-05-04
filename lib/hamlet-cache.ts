@@ -48,7 +48,7 @@ export interface HamletFeature {
    * the Delayed badge still renders). Junior should treat this as
    * the effective risk.
    */
-  versionChanges?: Array<{ date: string; from: string; to: string }>;
+  versionChanges?: Array<{ date: string; from: string; to: string; reason?: string }>;
   pmOwner?: string;
   techOwner?: string;
   iosOwner?: string;
@@ -143,7 +143,8 @@ export function formatFeature(f: HamletFeature): string {
       .map(c => {
         const [, mm, dd] = c.date.split('-');
         const short = (mm && dd) ? `${parseInt(mm, 10)}/${parseInt(dd, 10)}: ` : '';
-        return `${short}${c.from} → ${c.to}`;
+        const reason = c.reason ? ` (due to ${c.reason})` : '';
+        return `${short}${c.from} → ${c.to}${reason}`;
       })
       .join('; ');
     lines.push(`Risk: Delayed (${summary})`);
