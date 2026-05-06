@@ -154,26 +154,50 @@ function markdownCardContent(text: string): string {
   });
 }
 
+/**
+ * Strip <at email=…>Name</at> tags down to just the display name.
+ * Used as a fallback when Lark rejects a card with code=230099 because
+ * one of the @-mentioned emails doesn't correspond to a current Lark
+ * user (former employees, stale cache, malformed email, etc.). The
+ * <at id=ou_xxx>…</at> open_id form is preserved — those validate
+ * differently and are usually fine.
+ */
+function stripEmailMentions(text: string): string {
+  return text.replace(/<at\s+email=[^>]*>([^<]*)<\/at>/gi, '$1');
+}
+
 export async function sendMessage(chatId: string, text: string): Promise<void> {
   const token = await getTenantToken();
-  const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      receive_id: chatId,
-      msg_type: 'interactive',
-      content: markdownCardContent(text),
-    }),
-  });
-  // Lark returns 200 even when the operation is logically rejected
-  // (bad card content, missing perms, etc.) — only the body's `code`
-  // field tells you. Surface that so silent failures aren't invisible.
-  try {
-    const body = await res.json() as { code?: number; msg?: string };
-    if (body.code && body.code !== 0) {
-      console.warn(`[lark] sendMessage chat=${chatId} failed: code=${body.code} msg=${body.msg ?? ''} textLen=${text.length}`);
+
+  const post = async (body: string) => {
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        receive_id: chatId,
+        msg_type: 'interactive',
+        content: markdownCardContent(body),
+      }),
+    });
+    let parsed: { code?: number; msg?: string } = {};
+    try { parsed = await res.json() as typeof parsed; } catch { /* ignore */ }
+    return parsed;
+  };
+
+  const first = await post(text);
+  if (!first.code || first.code === 0) return;
+
+  if (first.code === 230099 && /<at\s+email=/i.test(text)) {
+    const fallback = stripEmailMentions(text);
+    if (fallback !== text) {
+      console.warn(`[lark] sendMessage chat=${chatId}: card rejected (code=230099) — retrying with email mentions stripped`);
+      const second = await post(fallback);
+      if (!second.code || second.code === 0) return;
+      console.warn(`[lark] sendMessage chat=${chatId} retry also failed: code=${second.code} msg=${second.msg ?? ''}`);
+      return;
     }
-  } catch { /* ignore body-parse failures */ }
+  }
+  console.warn(`[lark] sendMessage chat=${chatId} failed: code=${first.code} msg=${first.msg ?? ''} textLen=${text.length}`);
 }
 
 export async function sendReply(
@@ -183,26 +207,42 @@ export async function sendReply(
   mentionName?: string,
 ): Promise<void> {
   const token = await getTenantToken();
-  const md = mentionOpenId
-    ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at> ${text}`
-    : text;
-  const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      msg_type: 'interactive',
-      content: markdownCardContent(md),
-    }),
-  });
-  // Same deal as sendMessage — 200 doesn't mean success in Lark's API.
-  // Log the body code when it's non-zero so we can see what's being
-  // rejected (most common: 230002 perm, 230015 invalid card, etc.).
-  try {
-    const body = await res.json() as { code?: number; msg?: string };
-    if (body.code && body.code !== 0) {
-      console.warn(`[lark] sendReply parent=${messageId} failed: code=${body.code} msg=${body.msg ?? ''} textLen=${text.length} preview=${text.slice(0, 120)}`);
+  const buildMd = (body: string) => mentionOpenId
+    ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at> ${body}`
+    : body;
+
+  const post = async (body: string) => {
+    const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        msg_type: 'interactive',
+        content: markdownCardContent(buildMd(body)),
+      }),
+    });
+    let parsed: { code?: number; msg?: string } = {};
+    try { parsed = await res.json() as typeof parsed; } catch { /* ignore */ }
+    return parsed;
+  };
+
+  const first = await post(text);
+  if (!first.code || first.code === 0) return;
+
+  // 230099 = "invalid user resource (at/person) in your card" — Lark
+  // validates @-mentioned emails and rejects the whole card if any is
+  // a former employee / stale cache entry / malformed. Retry once
+  // with email-form @ tags stripped to plain names.
+  if (first.code === 230099 && /<at\s+email=/i.test(text)) {
+    const fallback = stripEmailMentions(text);
+    if (fallback !== text) {
+      console.warn(`[lark] sendReply parent=${messageId}: card rejected (code=230099, invalid mention email) — retrying with email mentions stripped`);
+      const second = await post(fallback);
+      if (!second.code || second.code === 0) return;
+      console.warn(`[lark] sendReply parent=${messageId} retry also failed: code=${second.code} msg=${second.msg ?? ''}`);
+      return;
     }
-  } catch { /* ignore body-parse failures */ }
+  }
+  console.warn(`[lark] sendReply parent=${messageId} failed: code=${first.code} msg=${first.msg ?? ''} textLen=${text.length} preview=${text.slice(0, 120)}`);
 }
 
 export async function sendCardMessage(chatId: string, title: string, markdown: string): Promise<void> {
