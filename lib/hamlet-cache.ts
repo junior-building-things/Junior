@@ -119,13 +119,24 @@ export function findFeature(features: HamletFeature[], query: string): HamletFea
  * Format a feature into a readable string for Gemini to use in its response.
  */
 export function formatFeature(f: HamletFeature): string {
-  // Annotate owner names with their email for @mention lookup.
-  // Gemini should render these as <at email=xxx></at> tags.
+  // Annotate each owner name with its email for @mention lookup.
+  // Gemini should render each name as its own <at email=xxx></at> tag.
+  //
+  // Multi-owner fields come through as comma-joined strings like
+  // "Tao Zhu, Yi Wang". The previous version of this helper only
+  // annotated the FIRST name with [email=…] and left the rest bare,
+  // which let Gemini hallucinate an email pattern for the second
+  // owner — Lark then rejected the whole interactive card with
+  // code=230099 ("invalid user resource"). Annotate every name
+  // separately so the model only ever emits real emails.
   const withEmail = (name?: string): string => {
     if (!name) return '';
-    const firstName = name.split(',')[0]?.trim();
-    const email = firstName ? f.pocEmails?.[firstName] : undefined;
-    return email ? `${name} [email=${email}]` : name;
+    return name.split(',').map(part => {
+      const trimmed = part.trim();
+      if (!trimmed) return '';
+      const email = f.pocEmails?.[trimmed];
+      return email ? `${trimmed} [email=${email}]` : trimmed;
+    }).filter(Boolean).join(', ');
   };
 
   const lines: string[] = [`Feature: ${f.name}`];
