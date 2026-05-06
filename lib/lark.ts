@@ -147,6 +147,89 @@ function hasMarkdown(text: string): boolean {
 }
 
 /** Build an interactive card body with markdown content (no header). */
+/**
+ * Resolve a batch of email addresses to Lark open_ids via the
+ * /contact/v3/users/batch_get_id endpoint. Returns a map of
+ * email → open_id ONLY for emails that Lark could resolve to a
+ * live user in the current tenant. Unresolved emails are absent
+ * from the returned map.
+ *
+ * Why we need this: Lark's interactive cards reject the whole
+ * card with code=230099 if any <at email=…> mention can't be
+ * resolved (former employees, wrong domain, no Lark seat in
+ * this tenant). Pre-resolving lets us either use the open_id
+ * form (always valid) or drop the @-mention entirely.
+ *
+ * Results are cached in-process for `EMAIL_RESOLVE_TTL_MS` so
+ * repeated formatFeature calls within the same instance don't
+ * re-query for every render.
+ */
+const EMAIL_RESOLVE_TTL_MS = 60 * 60 * 1000; // 1h
+interface EmailCacheEntry { openId: string | null; expiresAt: number }
+const emailResolveCache = new Map<string, EmailCacheEntry>();
+
+export async function resolveOpenIdsByEmail(
+  emails: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (emails.length === 0) return out;
+
+  const now = Date.now();
+  const toFetch: string[] = [];
+  for (const email of emails) {
+    const cached = emailResolveCache.get(email);
+    if (cached && cached.expiresAt > now) {
+      if (cached.openId) out[email] = cached.openId;
+    } else {
+      toFetch.push(email);
+    }
+  }
+  if (toFetch.length === 0) return out;
+
+  let token: string;
+  try { token = await getTenantToken(); } catch { return out; }
+
+  // Lark caps batch_get_id at ~50 emails per call; chunk to be safe.
+  for (let i = 0; i < toFetch.length; i += 50) {
+    const batch = toFetch.slice(i, i + 50);
+    try {
+      const res = await fetch(
+        `${LARK_BASE_URL}/open-apis/contact/v3/users/batch_get_id?user_id_type=open_id`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emails: batch }),
+        },
+      );
+      const data = await res.json() as {
+        code: number;
+        data?: { user_list?: Array<{ email?: string; user_id?: string }> };
+      };
+      const seen = new Set<string>();
+      if (data.code === 0) {
+        for (const u of data.data?.user_list ?? []) {
+          if (u.email) {
+            seen.add(u.email);
+            const openId = u.user_id ?? null;
+            emailResolveCache.set(u.email, { openId, expiresAt: now + EMAIL_RESOLVE_TTL_MS });
+            if (openId) out[u.email] = openId;
+          }
+        }
+      }
+      // Mark un-returned emails as unresolved so we don't re-query
+      // for the next hour. Lark omits emails it can't find.
+      for (const email of batch) {
+        if (!seen.has(email)) {
+          emailResolveCache.set(email, { openId: null, expiresAt: now + EMAIL_RESOLVE_TTL_MS });
+        }
+      }
+    } catch (e) {
+      console.warn('[lark] resolveOpenIdsByEmail batch failed:', e);
+    }
+  }
+  return out;
+}
+
 function markdownCardContent(text: string): string {
   return JSON.stringify({
     config: { wide_screen_mode: true },

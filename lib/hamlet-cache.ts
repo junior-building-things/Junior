@@ -117,25 +117,60 @@ export function findFeature(features: HamletFeature[], query: string): HamletFea
 
 /**
  * Format a feature into a readable string for Gemini to use in its response.
+ *
+ * Async because we pre-resolve every owner email to a Lark open_id via
+ * the contact API. Lark's interactive cards reject the whole card with
+ * code=230099 if any <at email=…> mention can't be resolved (former
+ * employees, wrong domain, no Lark seat in this tenant) — so we either
+ * use the open_id form (always validates) or render the name as plain
+ * text (no @-tag at all). Resolution is cached in-process for ~1h.
  */
-export function formatFeature(f: HamletFeature): string {
-  // Annotate each owner name with its email for @mention lookup.
-  // Gemini should render each name as its own <at email=xxx></at> tag.
-  //
-  // Multi-owner fields come through as comma-joined strings like
-  // "Tao Zhu, Yi Wang". The previous version of this helper only
-  // annotated the FIRST name with [email=…] and left the rest bare,
-  // which let Gemini hallucinate an email pattern for the second
-  // owner — Lark then rejected the whole interactive card with
-  // code=230099 ("invalid user resource"). Annotate every name
-  // separately so the model only ever emits real emails.
+export async function formatFeature(f: HamletFeature): Promise<string> {
+  // Collect every email this feature would mention so we can resolve
+  // them all in one batch up-front.
+  const ROLE_FIELDS: (keyof HamletFeature)[] = [
+    'owner', 'pmOwner', 'techOwner', 'iosOwner', 'androidOwner',
+    'serverOwner', 'qaOwner', 'uiuxOwner', 'daOwner', 'contentDesigner',
+  ];
+  const allEmails = new Set<string>();
+  for (const key of ROLE_FIELDS) {
+    const val = f[key] as string | undefined;
+    if (!val) continue;
+    for (const part of val.split(',')) {
+      const email = f.pocEmails?.[part.trim()];
+      if (email) allEmails.add(email);
+    }
+  }
+  let emailToOpenId: Record<string, string> = {};
+  if (allEmails.size > 0) {
+    try {
+      const { resolveOpenIdsByEmail } = await import('./lark');
+      emailToOpenId = await resolveOpenIdsByEmail([...allEmails]);
+    } catch (e) {
+      console.warn('[hamlet-cache] email→open_id resolution failed:', e);
+    }
+  }
+
+  // Annotate each owner name with the most reliable identifier:
+  //   - [id=ou_xxx] when Lark resolved the email to an open_id
+  //   - [email=…]   when we have an email but Lark didn't resolve it
+  //                 (kept as a soft fallback; Gemini may still try
+  //                 to render it, but the sendReply retry will strip
+  //                 if Lark rejects the card)
+  //   - plain name  when no email is known at all
   const withEmail = (name?: string): string => {
     if (!name) return '';
     return name.split(',').map(part => {
       const trimmed = part.trim();
       if (!trimmed) return '';
       const email = f.pocEmails?.[trimmed];
-      return email ? `${trimmed} [email=${email}]` : trimmed;
+      if (!email) return trimmed;
+      const openId = emailToOpenId[email];
+      if (openId) return `${trimmed} [id=${openId}]`;
+      // Email known but couldn't resolve to a Lark user — render as
+      // plain name so the at-tag isn't generated at all. Avoids the
+      // 230099 card rejection entirely.
+      return trimmed;
     }).filter(Boolean).join(', ');
   };
 

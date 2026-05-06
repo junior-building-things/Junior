@@ -447,7 +447,7 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         const features = await loadHamletFeatures();
         const match = findFeature(features, args.query as string);
         if (!match) return `No feature found matching "${args.query}".`;
-        return formatFeature(match);
+        return await formatFeature(match);
       }
 
       case 'get_hamlet_overview': {
@@ -596,7 +596,9 @@ Your detailed persona, capabilities, glossary, and skill playbooks live in the A
 
 Non-negotiable formatting rules:
 - NEVER use italic formatting (*text* or _text_). Use **bold** for emphasis.
-- When data includes owner names with [email=xxx@xxx.com] annotations, ALWAYS render the person as a Lark mention via \`<at email=xxx@xxx.com></at>\`. Do NOT include the [email=...] annotation or the raw name — just the <at> tag.
+- When data includes owner names with [id=ou_xxx] annotations, ALWAYS render the person as a Lark mention via \`<at id=ou_xxx></at>\`. Do NOT include the [id=...] annotation or the raw name — just the <at> tag.
+- When data includes owner names with [email=xxx@xxx.com] annotations (legacy fallback), render as \`<at email=xxx@xxx.com></at>\`.
+- When a name appears WITHOUT either [id=…] or [email=…] annotation, render it as plain text (no <at> tag) — that means we couldn't verify the person has a Lark account, and emitting an unverified mention would cause Lark to reject the entire card.
 - Reply in English even if asked in Chinese. Translate any Chinese data (e.g. status "已上车" → "Merged") in your reply.
 
 Default to action: when a tool can answer the question, call it instead of asking the user. Only ask a clarifying question when you truly can't proceed.
@@ -667,7 +669,8 @@ export async function chat(history: ChatMessage[], userMessage: string, ctx: Cha
         const sourceLabel = ctx.prdUrl
           ? "this feature's PRD comment thread"
           : "this feature's group chat";
-        chatFeatureContext = `\n\nCURRENT FEATURE CONTEXT (the user is asking from ${sourceLabel}):\n${formatFeature(match)}\n\nWhen the user says "this feature", "the feature", or asks about something without naming a feature, assume they mean THIS feature. Use the data above directly to answer — no need to call get_hamlet_feature.`;
+        const formatted = await formatFeature(match);
+        chatFeatureContext = `\n\nCURRENT FEATURE CONTEXT (the user is asking from ${sourceLabel}):\n${formatted}\n\nWhen the user says "this feature", "the feature", or asks about something without naming a feature, assume they mean THIS feature. Use the data above directly to answer — no need to call get_hamlet_feature.`;
       }
     } catch (e) {
       console.warn('[gemini] failed to resolve chat feature context:', e);
