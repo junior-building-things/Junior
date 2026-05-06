@@ -156,7 +156,7 @@ function markdownCardContent(text: string): string {
 
 export async function sendMessage(chatId: string, text: string): Promise<void> {
   const token = await getTenantToken();
-  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -165,6 +165,15 @@ export async function sendMessage(chatId: string, text: string): Promise<void> {
       content: markdownCardContent(text),
     }),
   });
+  // Lark returns 200 even when the operation is logically rejected
+  // (bad card content, missing perms, etc.) — only the body's `code`
+  // field tells you. Surface that so silent failures aren't invisible.
+  try {
+    const body = await res.json() as { code?: number; msg?: string };
+    if (body.code && body.code !== 0) {
+      console.warn(`[lark] sendMessage chat=${chatId} failed: code=${body.code} msg=${body.msg ?? ''} textLen=${text.length}`);
+    }
+  } catch { /* ignore body-parse failures */ }
 }
 
 export async function sendReply(
@@ -177,7 +186,7 @@ export async function sendReply(
   const md = mentionOpenId
     ? `<at id=${mentionOpenId}>${mentionName ?? 'there'}</at> ${text}`
     : text;
-  await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
+  const res = await fetch(`${LARK_BASE_URL}/open-apis/im/v1/messages/${messageId}/reply`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -185,6 +194,15 @@ export async function sendReply(
       content: markdownCardContent(md),
     }),
   });
+  // Same deal as sendMessage — 200 doesn't mean success in Lark's API.
+  // Log the body code when it's non-zero so we can see what's being
+  // rejected (most common: 230002 perm, 230015 invalid card, etc.).
+  try {
+    const body = await res.json() as { code?: number; msg?: string };
+    if (body.code && body.code !== 0) {
+      console.warn(`[lark] sendReply parent=${messageId} failed: code=${body.code} msg=${body.msg ?? ''} textLen=${text.length} preview=${text.slice(0, 120)}`);
+    }
+  } catch { /* ignore body-parse failures */ }
 }
 
 export async function sendCardMessage(chatId: string, title: string, markdown: string): Promise<void> {
