@@ -30,6 +30,17 @@ const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'get_feature_by_doc_url',
+    description: 'Get enriched feature data (PM, Tech Owner, team roster, status, links, risk, version) by a Lark document URL — typically a PRD URL stored on the feature. Use whenever the user asks about a feature using a Lark doc/wiki URL — e.g. "who is the PM of https://bytedance.sg.larkoffice.com/docx/...". This is the doc-URL counterpart to get_feature_status (which is keyed by Meego URL); pick this when the URL is larkoffice.com/docx or larkoffice.com/wiki and the question is about the feature, NOT about the doc body content. Use read_document only when the user wants to read or summarize the doc itself.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        doc_url: { type: Type.STRING, description: 'Lark document URL (docx or wiki)' },
+      },
+      required: ['doc_url'],
+    },
+  },
+  {
     name: 'search_feature',
     description: 'Search for features by name keyword in the user\'s Meego projects.',
     parameters: {
@@ -447,6 +458,20 @@ async function executeTool(name: string, args: Record<string, unknown>, ctx: Cha
         const features = await loadHamletFeatures();
         const match = findFeature(features, args.query as string);
         if (!match) return `No feature found matching "${args.query}".`;
+        return await formatFeature(match);
+      }
+
+      case 'get_feature_by_doc_url': {
+        const features = await loadHamletFeatures();
+        const url = String(args.doc_url ?? '').trim();
+        // Exact match first. Fall back to docToken match because the
+        // same doc can be referenced as /docx/<token> and /wiki/<token>
+        // depending on whether it lives in a wiki space; feature.prd
+        // is stored in whichever form Hamlet first resolved.
+        const docToken = url.match(/\/(?:docx|wiki)\/([A-Za-z0-9_-]+)/)?.[1];
+        const match = features.find(f => f.prd === url)
+          ?? (docToken ? features.find(f => (f.prd ?? '').includes(docToken)) : undefined);
+        if (!match) return `No feature found in Hamlet with PRD URL ${url}.`;
         return await formatFeature(match);
       }
 
